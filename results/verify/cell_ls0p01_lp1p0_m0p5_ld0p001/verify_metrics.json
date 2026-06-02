@@ -1,0 +1,17 @@
+{
+  "theta_mean": 0.25513607263565063,
+  "gate_prob_mean": 0.6869020462036133,
+  "gates_gt_0.5": 3286,
+  "weights_mean_abs": 0.050198815762996674,
+  "weights_movement_from_init": 0.05805435971005815,
+  "absA_mean": 0.041576310992240906,
+  "absA_max": 0.289745569229126,
+  "edges_absA_gt_0.05": 1435,
+  "edges_absA_gt_0.10": 420,
+  "recon_phase_a_final": 0.4415,
+  "recon_active_final": 0.5427,
+  "recon_blowup_ratio": 1.2292185730464325,
+  "ortho_off_diag_mean_abs": 0.00014088893658481538,
+  "mean_programs_per_gene": 62.698,
+  "mean_n_affected_threshold": 47.48266423357664
+}

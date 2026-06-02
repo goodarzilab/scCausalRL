@@ -1,0 +1,104 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data files (large files)
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.csv
+*.tsv
+*.parquet
+*.zarr
+*.arrow
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoints/
+saved_models/
+
+# Logs
+logs/
+*.log
+wandb/
+runs/
+tensorboard/
+
+# Results (excluding small config files)
+results/**/*.pt
+results/**/*.pth
+results/**/*.pkl
+results/**/*.npy
+results/**/*.h5
+results/**/*.csv
+
+# Data directories with large files
+data/**/*.h5
+data/**/*.hdf5
+data/**/*.npy
+data/**/*.npz
+data/**/*.pkl
+data/**/*.csv
+data/**/*.tsv
+data/**/*.parquet
+
+# Specific large directories
+Norman/
+Replogle/
+Waddington_OT/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Keep important config files
+!configs/*.yaml
+!configs/*.yml
+!requirements.txt
