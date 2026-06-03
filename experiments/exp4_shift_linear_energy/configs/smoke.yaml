@@ -6,7 +6,7 @@ data:
   n_hvg: 3000
   dataset: "replogle"
   replogle_cell_line: "k562"
-  replogle_max_cells: 6000
+  replogle_max_cells: 12000
   split_seed: 42
   single_pert_train_frac: 0.8
   single_pert_val_frac: 0.1
@@ -52,7 +52,7 @@ phase1:
   cell_sentence_S: 16
   n_sentences_per_block: 2
   min_block_cells: 3
-  sentence_batch_size: 4
+  sentence_batch_size: 1
   pert_mse_weight: 1.0
   pert_mmd_weight: 1.0
   pert_energy_weight: 0.1
