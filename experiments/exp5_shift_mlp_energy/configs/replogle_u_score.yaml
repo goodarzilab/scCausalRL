@@ -1,0 +1,135 @@
+# Replogle K562 Phase 1 training with u-score (decoder-loading) intervention scheme.
+#
+# Differences from configs/replogle.yaml:
+#   - intervention.scheme = "u_score"  (do-operator via u = Σ L[g,:], M = diag(1-u))
+#   - lambda_sparse, lambda_prior, margin should be set to the grid-search winner
+#     before running this config (see scripts/run_phase1_grid.py + results/grid_search/summary.csv).
+#
+# The u-score scheme is read by:
+#   - rl/env.py                            (multi-step episode persistence)
+#   - evaluation/eval_combinatorial.py     (sequential combo intervention)
+#   - evaluation/run_perturbation_eval.py  (single-pert eval)
+#
+# Phase-1 perturbation_consistency_loss_v2 remains threshold-based by design
+# (it's a single-step loss; episode-level u accumulation isn't meaningful there).
+
+data:
+  norman_path: "/large_storage/goodarzilab/shervin/CausalBioRL/Norman/"
+  replogle_path: "/large_storage/goodarzilab/causal_state/pretrain_data/replogle"
+  waddington_path: "/large_storage/goodarzilab/shervin/CausalBioRL/Waddington_OT/"
+  n_hvg: 2000
+  dataset: "replogle"
+  replogle_cell_line: "k562"
+  replogle_max_cells: 200000     # Phase J: full K562 (~186k) for the promotion run.
+                                  # Grid sbatch passes --max_cells 50000 to keep the sweep fast.
+  split_seed: 42
+  single_pert_train_frac: 0.8
+  single_pert_val_frac: 0.1
+
+model:
+  latent_dim: 64
+  tau_init: 1.0
+  tau_min: 0.25
+  n_dag_samples: 16
+  dagma_s: 1.0
+
+phase1:
+  n_epochs: 150
+  batch_size: 256
+  lr: 1.0e-3
+  beta_start: 0.01
+  beta_end: 0.5
+  beta_anneal_epochs: 50
+  lambda_pert: 10.0
+  # Phase J final winner (from mini-grid 2372626 cell `ls10p0_lp10p0_m0p5_ld30p0`):
+  # - mean_programs_per_gene = 12.9 (was 62.6 init; passes the ≤15 acceptance for the first time)
+  # - mean_genes_per_program = 211 (D is genuinely disentangled at the program level)
+  # - 3576 strong gates, 2915 with sigmoid(theta)>0.5 (clean DAG)
+  # - D_l1 = 0.008 (vs 0.038 at λ_D=1 — 4.7× sparser)
+  # - recon = 0.537 (within 1% of any other cell), pert = 0.153
+  # - mean_l0_gt_0p5_u = 1.58 (u-score do-operator pins ~1.6 programs/gene)
+  lambda_sparse: 10.0          # Phase J: sub-1 values had no effect; 1 vs 10 was nearly identical
+  # lambda_spectral=0.1 (Phase G) — spectral_radius_penalty hard cap at 0.95 still
+  # works at 10× weaker weight thanks to the factored A having sigma_max ≈ 1.35 at init.
+  lambda_spectral: 0.1
+  lambda_ortho: 1.0
+  lambda_D_sparse: 30.0        # Phase J mini-grid winner — the only λ_D where progs/gene crosses below 15
+  lambda_prior: 10.0           # Phase J: 50 worsened recon without adding edges
+  prior_margin: 0.5
+  # Phase F: DAGMA acyclicity disabled. Real GRNs are cyclic (feedback, oscillators,
+  # autoregulation); spectral_stability_loss already keeps (I − A^T) invertible
+  # without forcing acyclicity. h(A) is still logged for monitoring, just not
+  # in the loss. See chat history for the full rationale.
+  dagma_rho_init: 0.0
+  dagma_rho_max: 0.0
+  dagma_lambda_init: 0.0
+  reconstruction_phase_epochs: 20
+  lr_warmup_epochs: 5
+  dag_warmin_epochs: 10
+  accumulation_steps: 4
+  pert_n_dag_samples: 1               # Phase F: N=1 for training (was 8); RL/eval scripts keep N=8 for uncertainty
+  pert_mutilate_threshold_frac: 0.1   # legacy threshold path only
+
+  # u-score / cell-sentence Phase-1 training:
+  cell_sentence_S: 64
+  n_sentences_per_block: 4
+  min_block_cells: 3                   # Phase F (correction): 50k cells × 1371 perts ÷ 48 gem_groups
+                                       # ≈ 0.76 cells/block on average. Floor=8 produced ZERO surviving
+                                       # blocks → silent fallback to legacy threshold path.  Lower to 3.
+  sentence_batch_size: 8
+  pert_loss_kind: "mse"               # Phase F: per-cell MSE on sentence sets (was energy distance)
+  pert_match_delta: true              # Phase H: match (decode(z_post)-decode(z_prev)) to (x_pert-x_ctrl)
+                                       # — forces A to be the only mechanism that can fit pert.
+                                       # See plan §H3a for the over-parameterisation diagnosis.
+
+intervention:
+  scheme: "u_score"
+  # Phase G: u_clip_max 1.0 → 0.5.  At u_i = 1.0 the do-operator pins
+  # z_post[i] = z_target[i] and zeros column i of Ã, so the SCM solve fully
+  # bypasses A on heavily-loaded programs.  The decoder+encoder alone can then
+  # satisfy the pert objective without ever needing to learn A — exactly what
+  # happened in the Phase F verification (θ stayed at init, pert went 0.59→0.46).
+  # Capping at 0.5 forces partial A involvement so pert produces a gradient on θ.
+  u_clip_max: 0.5
+  u_accumulate: true
+  knockout_clamp: true
+  # Combo eval default. 'parallel' applies all dx/u in a single SCM solve — order-invariant
+  # by construction (AB ≡ BA), and a strict generalisation of the additive baseline.
+  # 'sequential' keeps the legacy do(A) → recover ε → do(B) path (order-dependent).
+  combo_mode: "parallel"
+
+phase2:
+  n_iterations: 50000
+  vae_lr: 1.0e-4
+  policy_lr: 3.0e-4
+  critic_lr: 1.0e-3
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coeff: 0.01
+  value_coeff: 0.5
+  max_grad_norm: 0.5
+  n_epochs_per_update: 4
+  n_steps_per_rollout: 2048
+  ppo_batch_size: 64
+  max_episode_steps: 3
+  n_actions_per_gene: 2
+  alpha_pessimism: 1.0
+  beta_explore: 0.1
+  lambda_cost: 0.1
+  policy_relevance_upweight: 3.0
+  vae_update_every: 10
+  recluster_every: 1000
+  leiden_resolution: 1.0
+  leiden_n_neighbors: 15
+
+wandb:
+  enabled: true
+  project: "CausalBioRL"
+  entity: null
+  phase1_run_name: "phase1_replogle_u_score"
+  phase2_run_name: "phase2_replogle_u_score"
+
+eval:
+  n_dag_samples: 32
+  combo_holdout_frac: 1.0
