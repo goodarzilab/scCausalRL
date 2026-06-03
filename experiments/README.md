@@ -62,5 +62,26 @@ x_hat  = decoder(z_post)
   rebalancing.
 
 Open follow-ups: bump `latent_dim` (64 kept for baseline comparability; SCCVAE
-uses 512); per-perturbation eval-time penetrance grid-search on `shift_scale`;
-adapt the evaluation harness to the shift pathway.
+uses 512); rebalance loss-term weights from the W&B per-term breakdown.
+
+## Evaluation (`evaluation/run_shift_eval.py`)
+
+The shift-pathway eval. Takes a checkpoint + config and scores held-out
+(test-split) perturbations with the leak-free shift prediction
+`S^q = c·ShiftEncoder(pert_label[q]) → (I−A^T)⁻¹(ε+S^q) → decode`:
+
+- **Metrics** (target gene masked): downstream-DEG AUROC, Spearman (|effect| &
+  signed), direction accuracy, Pearson-on-DEGs, mean-shift MSE, and set-level
+  **RBF-MMD + energy distance** vs a **control-vs-observed floor**.
+- **Penetrance** `--c_mode fixed|search|both`: `fixed` (c=1, strict/leak-free,
+  uses learned `shift_scale`) is the honest default; `search` grid-searches c on
+  pseudo-bulk MSE (SCCVAE §2.2).
+- **Baselines**: correlation (control |corr|) and a **co-expression-neighbour
+  LOO** baseline (mean observed lfc of the k nearest train perts in the same
+  control-PCA label space the shift encoder uses) — the fair zero-shot comparator.
+- **Headline**: held-out test AUROC (shift c=1 / c-search) vs correlation vs co-exp.
+
+Run via `run_shift_eval.sbatch` (set `EXP_DIR`/`CKPT`/`CFG`/`OUTDIR`/`CMODE`,
+`WANDB_FLAG=--wandb`). The epoch-150 evals are submitted with
+`--dependency=afterok:<train_job>` so they fire automatically when training
+finishes. Synthetic CPU smoke: `tests/smoke_shift_eval.py`.
