@@ -26,7 +26,7 @@ def get_norman_perturbed_genes(path=None, include_singles=True, include_combos=T
         the same good_coverage filter applied during data/load_norman.py.
     """
     if path is None:
-        path = "/large_storage/goodarzilab/shervin/scCausalRL/Norman/"
+        path = "/large_storage/goodarzilab/shervin/CausalBioRL/Norman/"
     cell_id_file = os.path.join(path, "GSE133344_filtered_cell_identities.csv.gz")
     if not os.path.isfile(cell_id_file):
         raise FileNotFoundError(f"Norman cell_identities not found at {cell_id_file}")

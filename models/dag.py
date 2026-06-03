@@ -24,7 +24,7 @@ class DAGModule(nn.Module):
         DIRECT — no Gumbel-sigmoid bottleneck — so the model can adjust edge
         strengths even when theta updates are weak.
 
-    Empirically (scCausalRL Phase F/G/H verifications) the single-parameter
+    Empirically (CausalBioRL Phase F/G/H verifications) the single-parameter
     Gumbel-sigmoid faced an unsolvable trilemma: at θ near 0, Gumbel noise
     dominates; at θ near −3, σ'(θ) is saturated and gradients vanish.  The
     factored form sidesteps this — `weight` is learnable independently.

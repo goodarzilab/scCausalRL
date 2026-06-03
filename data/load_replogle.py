@@ -26,7 +26,7 @@ def load_replogle(path=None, n_hvg=2000, cell_line='k562', max_cells=50000,
     """
     from data.load_norman import split_single_perts
     if path is None:
-        path = "/large_storage/goodarzilab/shervin/scCausalRL/Replogle/"
+        path = "/large_storage/goodarzilab/shervin/CausalBioRL/Replogle/"
 
     # Resolve file: accept direct .h5ad path, or directory containing train_v5.h5ad
     # (preferred — pretrain_data layout) or legacy replogle.h5ad
@@ -41,6 +41,18 @@ def load_replogle(path=None, n_hvg=2000, cell_line='k562', max_cells=50000,
 
     adata = ad.read_h5ad(h5ad_file)
     print(f"  Full shape: {adata.shape}")
+
+    # K562_essential / K562_gwps unfiltered files have ENSG IDs as var_names
+    # but carry the human-readable symbol in var['gene_name']. Translate so the
+    # downstream pipeline (and any cross-dataset Norman alignment) sees symbols.
+    if 'gene_name' in adata.var.columns and adata.var_names[0].startswith('ENSG'):
+        new_names = adata.var['gene_name'].astype(str).values
+        # Some ENSG IDs map to the same symbol — make unique by suffixing
+        n_before = len(set(new_names))
+        adata.var_names = new_names
+        adata.var_names_make_unique()
+        print(f"  Renamed var_names from ENSG → gene symbol "
+              f"({n_before} unique symbols, {adata.n_vars - n_before} suffixed for duplicates)")
 
     # Some Replogle files (e.g. K562_gwps_filtered.h5ad) are already cell-line-
     # specific and do not carry a `cell_line` column. Only filter if the column

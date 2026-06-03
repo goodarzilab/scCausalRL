@@ -1,5 +1,5 @@
 """
-Perturbation Prediction Evaluation for scCausalRL.
+Perturbation Prediction Evaluation for CausalBioRL.
 
 Evaluates the Causal VAE's ability to predict perturbation effects, comparing
 against correlation and GRN baselines. Adapted from MultiOmics grid search
@@ -244,19 +244,30 @@ def evaluate_baseline(score_matrix, gene_to_idx, de_results, gene_names, exclude
 # MODEL-BASED PREDICTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 def evaluate_single_perts(model, X, data_dict, de_single, gene_names, ctrl_mean,
-                          device, n_dag_samples=32, n_ctrl_cells=50,
-                          scheme='threshold', u_clip_max=1.0):
+                          device, n_dag_samples=32, n_ctrl_cells=500,
+                          scheme='threshold', u_clip_max=1.0,
+                          input_mode='target_lfc', pert_direction=-1,
+                          canonical_magnitude=2.0,
+                          a_mode='learned', gene_idx_mode='correct', seed=42):
     """
     Predict single perturbation effects.
 
     scheme='threshold' (legacy) — multi-column mutilate via |dε|>thr·max|dε|.
     scheme='u_score'             — pin program i with u_i = L[gene, i] (single-step,
                                     u_prev=0); see docs/architecture_u_score.md.
+
+    input_mode='target_lfc' (default, Task A): dx_input[target]=lfc_observed[target], 0 elsewhere.
+    input_mode='canonical'  (Task B): dx_input[target]=pert_direction*magnitude, 0 elsewhere.
+    input_mode='observed_full' (legacy, leaky): full observed lfc passed through.
+
+    a_mode='zero'/'shuffled': ablation — override A at eval time.
+    gene_idx_mode='random': ablation — perturb a random gene instead of the labelled one.
     """
+    from models.dx_input import build_dx_input_single
     control_idx = np.array(data_dict['control_idx'])
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     ctrl_sample = rng.choice(len(control_idx), min(n_ctrl_cells, len(control_idx)), replace=False)
     x_ctrl_t = torch.tensor(X[control_idx[ctrl_sample]], dtype=torch.float32, device=device)
 
@@ -272,18 +283,39 @@ def evaluate_single_perts(model, X, data_dict, de_single, gene_names, ctrl_mean,
     results = []
     de_single_adata = data_dict['adata'].uns.get('de_single', {})
 
+    n_genes = len(gene_names)
+    abl_rng = np.random.default_rng(seed + 1)  # for gene_idx_mode='random' and shuffled A
+
     for pert_gene, de_data in tqdm(de_single.items(), desc='Single perts'):
         if pert_gene not in gene_to_idx:
             continue
-        gi = gene_to_idx[pert_gene]
+        gi_true = gene_to_idx[pert_gene]
+        gi = int(abl_rng.integers(0, n_genes)) if gene_idx_mode == 'random' else gi_true
 
-        # Get dx (precomputed DE from full dataset)
+        # Observed lfc (for 'target_lfc' magnitude AND for scoring; never enters the
+        # model under 'canonical' mode).
         dx_np = de_single_adata.get(pert_gene, de_data['lfc'])
-        dx_t = torch.tensor(np.asarray(dx_np, dtype=np.float32), device=device)
+        dx_t = build_dx_input_single(
+            input_mode=input_mode,
+            target_idx=gi,
+            lfc_observed=dx_np,
+            n_genes=n_genes,
+            pert_direction=pert_direction,
+            canonical_magnitude=canonical_magnitude,
+            device=device,
+        )
 
         with torch.no_grad():
             # Single deterministic DAG — no bootstrapping for evaluation
             A_eval = model.dag.sample_A(n_samples=1).squeeze(0)
+            if a_mode == 'zero':
+                A_eval = torch.zeros_like(A_eval)
+            elif a_mode == 'shuffled':
+                flat = A_eval.flatten()
+                perm = torch.randperm(flat.numel(),
+                                      generator=torch.Generator().manual_seed(seed))
+                A_eval = flat[perm].reshape_as(A_eval)
+                A_eval.fill_diagonal_(0.0)
             if scheme == 'u_score':
                 # Single-step: u_prev=0 ⇒ u = L[gene, :]
                 z_prev = model.dag.scm_forward(eps_ctrl, A_eval)
@@ -304,9 +336,11 @@ def evaluate_single_perts(model, X, data_dict, de_single, gene_names, ctrl_mean,
         obs_effect = de_data['effect']
         obs_sig = de_data['sig']
 
-        # Exclude perturbed gene itself
+        # Exclude perturbed gene itself from scoring. Use the TRUE labelled gene
+        # (gi_true) so that ablations (gene_idx_mode='random') still compare
+        # the model's prediction to the right ground-truth.
         mask = np.ones(len(gene_names), dtype=bool)
-        mask[gi] = False
+        mask[gi_true] = False
 
         pred_abs = np.abs(pred_de[mask])
         pred_signed = pred_de[mask]
@@ -352,9 +386,11 @@ def evaluate_single_perts(model, X, data_dict, de_single, gene_names, ctrl_mean,
 
 
 def evaluate_combo_perts(model, X, data_dict, de_single, de_combo, gene_names,
-                         ctrl_mean, device, n_dag_samples=32, n_ctrl_cells=20,
+                         ctrl_mean, device, n_dag_samples=32, n_ctrl_cells=200,
                          scheme='threshold', u_clip_max=1.0,
-                         combo_mode='parallel'):
+                         combo_mode='parallel',
+                         input_mode='target_lfc', pert_direction=-1,
+                         canonical_magnitude=2.0, seed=42):
     """Predict held-out combo perturbation effects.
 
     scheme='threshold' (legacy) | 'u_score' (decoder-loading).
@@ -365,7 +401,7 @@ def evaluate_combo_perts(model, X, data_dict, de_single, de_combo, gene_names,
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     de_single_adata = data_dict['adata'].uns.get('de_single', {})
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     ctrl_sample = rng.choice(len(control_idx), min(n_ctrl_cells, len(control_idx)), replace=False)
     x_ctrl_t = torch.tensor(X[control_idx[ctrl_sample]], dtype=torch.float32, device=device)
 
@@ -380,11 +416,27 @@ def evaluate_combo_perts(model, X, data_dict, de_single, de_combo, gene_names,
         obs_effect = de_data['effect']
         obs_sig = de_data['sig']
 
-        # D† combo prediction
-        dx_a = de_single_adata.get(ga, de_single.get(ga, {}).get('lfc'))
-        dx_b = de_single_adata.get(gb, de_single.get(gb, {}).get('lfc'))
-        dx_a_t = torch.tensor(np.asarray(dx_a, dtype=np.float32), device=device) if dx_a is not None else None
-        dx_b_t = torch.tensor(np.asarray(dx_b, dtype=np.float32), device=device) if dx_b is not None else None
+        # Build dx inputs per gene under the eval input_mode (see models.dx_input).
+        # For 'target_lfc': dx_a is a sparse one-hot at ga with magnitude from the
+        # observed single-pert lfc; same for dx_b. For 'canonical': uses
+        # pert_direction * canonical_magnitude. For 'observed_full' (legacy):
+        # passes through the full observed dx (leaky).
+        from models.dx_input import build_dx_input_single
+        n_genes_local = len(gene_names)
+        dx_a_obs = de_single_adata.get(ga, de_single.get(ga, {}).get('lfc'))
+        dx_b_obs = de_single_adata.get(gb, de_single.get(gb, {}).get('lfc'))
+        dx_a_t = build_dx_input_single(
+            input_mode=input_mode, target_idx=ga_idx,
+            lfc_observed=dx_a_obs, n_genes=n_genes_local,
+            pert_direction=pert_direction,
+            canonical_magnitude=canonical_magnitude, device=device,
+        ) if dx_a_obs is not None else None
+        dx_b_t = build_dx_input_single(
+            input_mode=input_mode, target_idx=gb_idx,
+            lfc_observed=dx_b_obs, n_genes=n_genes_local,
+            pert_direction=pert_direction,
+            canonical_magnitude=canonical_magnitude, device=device,
+        ) if dx_b_obs is not None else None
 
         with torch.no_grad():
             mean_AB, mean_BA, std_AB, std_BA = predict_combo(
@@ -423,11 +475,16 @@ def evaluate_combo_perts(model, X, data_dict, de_single, de_combo, gene_names,
 
         model_results.append(r)
 
-        # Additive baseline: ctrl + de_a + de_b
-        eff_a = np.asarray(dx_a) if dx_a is not None else np.zeros(len(gene_names))
-        eff_b = np.asarray(dx_b) if dx_b is not None else np.zeros(len(gene_names))
+        # Additive baseline: ctrl + dx_a + dx_b (under the SAME input_mode as
+        # the model — sparse under target_lfc/canonical, full under observed_full).
+        # This makes the comparison apples-to-apples: under sparse modes, the
+        # additive baseline degenerates to ctrl + (one or two on-target values),
+        # so its downstream-DEG AUROC drops to ~0.5 — exposing what the model
+        # is really doing.
+        eff_a = dx_a_t.cpu().numpy() if dx_a_t is not None else np.zeros(len(gene_names))
+        eff_b = dx_b_t.cpu().numpy() if dx_b_t is not None else np.zeros(len(gene_names))
         add_pred = ctrl_mean + eff_a + eff_b
-        add_de = add_pred - ctrl_mean  # = eff_a + eff_b
+        add_de = add_pred - ctrl_mean  # = eff_a + eff_b under the chosen input_mode
 
         ra = {'combo': f'{ga}+{gb}'}
         if len(add_de) > 10:
@@ -635,7 +692,7 @@ def plot_auroc_histogram(model_results, out_dir, pert_type='single'):
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════
 def main():
-    parser = argparse.ArgumentParser(description="scCausalRL Perturbation Evaluation")
+    parser = argparse.ArgumentParser(description="CausalBioRL Perturbation Evaluation")
     parser.add_argument('--checkpoint', type=str, default='checkpoints/phase1_best.pt')
     parser.add_argument('--config', type=str, default='configs/default.yaml')
     parser.add_argument('--n_dag_samples', type=int, default=32)
@@ -646,7 +703,34 @@ def main():
     parser.add_argument('--combo_mode', type=str, default=None,
                         choices=[None, 'parallel', 'sequential'],
                         help="Combo intervention mode for u_score; defaults to config value or 'parallel'.")
+    parser.add_argument('--input_mode', type=str, default='target_lfc',
+                        choices=['observed_full', 'target_lfc', 'canonical'],
+                        help="Eval input mode. 'target_lfc' (Task A, default), "
+                             "'canonical' (Task B, zero-shot), 'observed_full' (legacy leaky).")
+    parser.add_argument('--pert_direction', type=int, default=None,
+                        choices=[-1, 1],
+                        help="-1 for CRISPRi, +1 for CRISPRa. If unset, auto from config.")
+    parser.add_argument('--canonical_magnitude', type=float, default=2.0,
+                        help="Magnitude for input_mode='canonical' (target gets pert_direction*magnitude).")
+    parser.add_argument('--a_mode', type=str, default='learned',
+                        choices=['learned', 'zero', 'shuffled'],
+                        help="Ablation knob: 'zero' kills A, 'shuffled' randomises A entries.")
+    parser.add_argument('--gene_idx_mode', type=str, default='correct',
+                        choices=['correct', 'random'],
+                        help="Ablation knob: 'random' perturbs a random gene instead of the labelled one.")
+    parser.add_argument('--n_ctrl_cells', type=int, default=500,
+                        help="Number of control cells to sample for single-pert eval (default 500).")
+    parser.add_argument('--n_ctrl_combo', type=int, default=200,
+                        help="Number of control cells to sample for combo eval (default 200).")
+    parser.add_argument('--seed', type=int, default=42,
+                        help="Random seed for ctrl-cell sampling + ablations.")
     args = parser.parse_args()
+
+    # Auto-detect pert_direction from config if not provided.
+    # CRISPRi (Replogle) → -1; CRISPRa (Norman) → +1.
+    if args.pert_direction is None:
+        dataset_name = '<unset>'  # filled in below after config load
+        args.pert_direction = -1   # safe default; overridden after config loads
 
     device = torch.device(args.device) if args.device else \
              torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -663,6 +747,22 @@ def main():
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     n_genes = len(gene_names)
     X_ctrl = X[data_dict['control_idx']]
+
+    # Auto-detect pert_direction from the trained-on dataset: Replogle = CRISPRi (-1),
+    # Norman = CRISPRa (+1). Combined uses CRISPRi default; we mark mixed-modality
+    # eval as a "future work" item. Caller can always override via --pert_direction.
+    if args.pert_direction is None or args.pert_direction == -1:
+        dataset_name = config.get('data', {}).get('dataset', 'replogle').lower()
+        if dataset_name == 'norman':
+            args.pert_direction = +1
+        elif dataset_name == 'combined':
+            # Default to -1 (CRISPRi); for proper mixed-modality eval the dataset
+            # split should expose per-pert modality and we'd dispatch per-pert.
+            args.pert_direction = -1
+        else:
+            args.pert_direction = -1
+        print(f"  pert_direction auto-detected from dataset={dataset_name}: "
+              f"{args.pert_direction:+d}")
 
     # ── Step 2: Load split ────────────────────────────────────────────────
     pert_split = ckpt.get('pert_split', None)
@@ -715,7 +815,13 @@ def main():
         model_res = evaluate_single_perts(
             model, X, data_dict, de_split, gene_names, ctrl_mean,
             device, n_dag_samples=args.n_dag_samples,
-            scheme=scheme, u_clip_max=u_clip_max)
+            n_ctrl_cells=args.n_ctrl_cells,
+            scheme=scheme, u_clip_max=u_clip_max,
+            input_mode=args.input_mode,
+            pert_direction=args.pert_direction,
+            canonical_magnitude=args.canonical_magnitude,
+            a_mode=args.a_mode, gene_idx_mode=args.gene_idx_mode,
+            seed=args.seed)
 
         # Baselines on same genes
         corr_res = evaluate_baseline(corr_matrix, gene_to_idx, de_split, gene_names)
@@ -750,7 +856,12 @@ def main():
     model_combo, additive_combo = evaluate_combo_perts(
         model, X, data_dict, de_single, de_combo_valid, gene_names, ctrl_mean,
         device, n_dag_samples=args.n_dag_samples,
-        scheme=scheme, u_clip_max=u_clip_max, combo_mode=combo_mode)
+        n_ctrl_cells=args.n_ctrl_combo,
+        scheme=scheme, u_clip_max=u_clip_max, combo_mode=combo_mode,
+        input_mode=args.input_mode,
+        pert_direction=args.pert_direction,
+        canonical_magnitude=args.canonical_magnitude,
+        seed=args.seed)
 
     # Correlation baseline for combos
     corr_combo = []

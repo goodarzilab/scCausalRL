@@ -170,6 +170,10 @@ def perturbation_set_loss_u(
     n_dag_samples=1,
     loss_kind="mse",
     match_delta=True,
+    input_mode='observed_full',
+    pert_direction_batch=None,   # LongTensor[B] +1 (CRISPRa) / -1 (CRISPRi)
+    canonical_magnitude=2.0,
+    aux_prop_weight=0.0,
 ):
     """u-score set-level perturbation consistency loss — VECTORISED.
 
@@ -231,12 +235,27 @@ def perturbation_set_loss_u(
     u_clip_max = float(getattr(model, 'u_clip_max', 1.0))
     u_all = L[gene_idx.long()].clamp(max=u_clip_max)                # [B, d]
 
+    # dx_all is the per-sentence FULL observed delta — used both as the target
+    # for match_delta (everywhere) AND as the source of the leaky 'observed_full'
+    # input for the dz path. The Task-A fix builds a sparse dx_input here that
+    # ONLY has a value at the perturbed gene index.
+    dx_all = (x_pert_set.mean(1) - x_ctrl_set.mean(1)).detach()    # [B, G]
+
+    from models.dx_input import build_dx_input_batch
+    dx_input = build_dx_input_batch(
+        input_mode=input_mode,
+        gene_idx_batch=gene_idx,
+        dx_full_batch=dx_all,
+        n_genes=G,
+        pert_direction_batch=pert_direction_batch,
+        canonical_magnitude=canonical_magnitude,
+    )                                                              # [B, G]
+
     # dz per sentence via batched D⁺.
     # D†: dz = (D^T D + λI)^{-1} D^T dx.  Batched form: dz [B, d] from dx [B, G].
-    dx_all = (x_pert_set.mean(1) - x_ctrl_set.mean(1)).detach()    # [B, G]
     D = model.decoder.D.detach()                                   # [G, d]
     DtD = D.T @ D + 1e-6 * torch.eye(d, device=device, dtype=D.dtype)  # [d, d]
-    Dt_dx_T = D.T @ dx_all.T                                       # [d, B]
+    Dt_dx_T = D.T @ dx_input.T                                     # [d, B]   (sparse if Task-A)
     dz_all = torch.linalg.solve(DtD, Dt_dx_T).T                    # [B, d]
 
     # Sample N DAGs (in eval this is N=8 for uncertainty; in training default N=1).
@@ -276,12 +295,15 @@ def perturbation_set_loss_u(
     # Decode all N*B*S cells in one shot.
     x_hat_post = model.decoder(z_post.reshape(-1, d)).reshape(n_dag_samples, B, S, G)
 
+    # Always decode z_prev too — needed for match_delta and (when active) the
+    # aux propagation loss. Cheap relative to the SCM solve.
+    x_hat_prev = model.decoder(z_prev.reshape(-1, d)).reshape(n_dag_samples, B, S, G)
+
     # ── Loss ────────────────────────────────────────────────────────────────
     if match_delta:
         # Phase H — delta-matching.  Decode z_prev too so the bias `b` (and the
         # encoder/decoder "trivial recon path") cancels in the difference.
         # delta_pred[n, b] = mean over S of (decode(z_post[n,b,:]) - decode(z_prev[n,b,:]))
-        x_hat_prev = model.decoder(z_prev.reshape(-1, d)).reshape(n_dag_samples, B, S, G)
         delta_pred = (x_hat_post - x_hat_prev).mean(dim=2)          # [N, B, G]
         # dx_all is the per-sentence observed delta — exactly mean(x_pert) - mean(x_ctrl).
         # MSE between predicted and observed per-sentence mean shifts.
@@ -305,12 +327,64 @@ def perturbation_set_loss_u(
                     per.append(distributional_loss(x_hat_post[n, b], x_pert_set[b], kind=loss_kind))
             loss = torch.stack(per).mean()
 
+    # ── V2 auxiliary propagation-only loss ─────────────────────────────────
+    # When aux_prop_weight > 0, ALSO run a forward pass with SPARSE dx_input
+    # (target_lfc, one scalar at the target gene) and add a downstream-only
+    # MSE term: matches delta_pred_sparse vs dx_all on every gene EXCEPT the
+    # target. Keeps the existing (possibly leaky) loss intact while forcing
+    # the SCM + decoder to learn how to propagate single-gene perturbations.
+    aux_loss_val = 0.0
+    aux_dz_norm = 0.0
+    if aux_prop_weight > 0:
+        # Build sparse dx via target_lfc (Option A magnitude).
+        dx_sparse = build_dx_input_batch(
+            input_mode='target_lfc',
+            gene_idx_batch=gene_idx,
+            dx_full_batch=dx_all,
+            n_genes=G,
+            pert_direction_batch=pert_direction_batch,
+            canonical_magnitude=canonical_magnitude,
+        )                                                          # [B, G]
+        Dt_dx_sparse_T = D.T @ dx_sparse.T                          # [d, B]
+        dz_sparse = torch.linalg.solve(DtD, Dt_dx_sparse_T).T       # [B, d]
+
+        z_target_sparse = z_prev + dz_sparse[None, :, None, :]      # [N, B, S, d]
+        eps_tilde_sparse = (
+            u_bcast * z_target_sparse
+            + (1.0 - u_bcast) * eps_ctrl_set[None, :, :, :]
+        )
+        rhs_post_sparse = eps_tilde_sparse.transpose(-1, -2).contiguous()
+        z_post_sparse = torch.linalg.solve(LHS_post, rhs_post_sparse).transpose(-1, -2)
+        z_post_sparse = torch.clamp(z_post_sparse, min=-20.0, max=20.0)
+        x_hat_post_sparse = model.decoder(
+            z_post_sparse.reshape(-1, d)
+        ).reshape(n_dag_samples, B, S, G)
+
+        delta_pred_sparse = (x_hat_post_sparse - x_hat_prev).mean(dim=2)  # [N, B, G]
+
+        # Mask out the target gene per batch element.
+        downstream_mask = torch.ones((B, G), device=device, dtype=delta_pred_sparse.dtype)
+        batch_arange_aux = torch.arange(B, device=device)
+        downstream_mask[batch_arange_aux, gene_idx.long()] = 0.0
+
+        aux_loss = (
+            ((delta_pred_sparse - dx_all[None, :, :]) ** 2)
+            * downstream_mask[None, :, :]
+        ).sum() / (downstream_mask.sum() * n_dag_samples + 1e-8)
+        loss = loss + aux_prop_weight * aux_loss
+        aux_loss_val = float(aux_loss.item())
+        aux_dz_norm = float(dz_sparse.norm(dim=1).mean().item())
+
     with torch.no_grad():
         diagnostics = {
             'loss': float(loss.item()),
             'kind': loss_kind,
             'match_delta': bool(match_delta),
+            'input_mode': input_mode,
+            'aux_prop_weight': float(aux_prop_weight),
+            'aux_loss': aux_loss_val,
             'mean_dz_norm': float(dz_all.norm(dim=1).mean().item()),
+            'mean_aux_dz_norm': aux_dz_norm,
             'mean_u_l1': float(u_all.sum(dim=1).mean().item()),
             'n_sentences': B,
             'n_dag_samples': n_dag_samples,

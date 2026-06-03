@@ -83,7 +83,7 @@ def load_norman(path=None, n_hvg=2000, **kwargs):
         pert_genes: list of all perturbed genes (action space)
     """
     if path is None:
-        path = "/large_storage/goodarzilab/shervin/scCausalRL/Norman/"
+        path = "/large_storage/goodarzilab/shervin/CausalBioRL/Norman/"
 
     print("Loading Norman dataset from MTX format...")
 

@@ -19,6 +19,9 @@ mkdir -p logs
 CKPT="${CKPT:-results/phase1_promote/checkpoints/phase1_best.pt}"
 CFG="${CFG:-configs/replogle_u_score.yaml}"
 NORMAN_PATH="${NORMAN_PATH:-/large_storage/goodarzilab/shervin/CausalBioRL/Norman/}"
+# Prefix for all output dirs so different checkpoints don't clobber each other.
+# Default keeps the legacy `results/eval_sweep/...` layout.
+OUTDIR_PREFIX="${OUTDIR_PREFIX:-results/eval_sweep}"
 
 if [ ! -f "$CKPT" ]; then
     echo "ERROR: checkpoint not found at $CKPT"
@@ -40,7 +43,7 @@ U_TAG=$(printf "u%s" "${U_MAX/./p}")  # e.g. 0.5 → u0p5
 case "$GROUP" in
     0)
         SLICE="replogle_single"
-        OUTDIR="results/eval_sweep/${SLICE}_${U_TAG}"
+        OUTDIR="${OUTDIR_PREFIX}/${SLICE}_${U_TAG}"
         mkdir -p "$OUTDIR"
         echo "=== Eval slice: Replogle single-pert (in-distribution) | u_max=$U_MAX ==="
         echo "Job:       $SLURM_ARRAY_JOB_ID.$SLURM_ARRAY_TASK_ID"
@@ -57,7 +60,7 @@ case "$GROUP" in
         ;;
     1)
         SLICE="norman_parallel"
-        OUTDIR="results/eval_sweep/${SLICE}_${U_TAG}"
+        OUTDIR="${OUTDIR_PREFIX}/${SLICE}_${U_TAG}"
         mkdir -p "$OUTDIR"
         echo "=== Eval slice: Norman external (single + combo PARALLEL) | u_max=$U_MAX ==="
         echo "Job:       $SLURM_ARRAY_JOB_ID.$SLURM_ARRAY_TASK_ID"
@@ -74,7 +77,7 @@ case "$GROUP" in
         ;;
     2)
         SLICE="norman_sequential"
-        OUTDIR="results/eval_sweep/${SLICE}_${U_TAG}"
+        OUTDIR="${OUTDIR_PREFIX}/${SLICE}_${U_TAG}"
         mkdir -p "$OUTDIR"
         echo "=== Eval slice: Norman external (single + combo SEQUENTIAL ablation) | u_max=$U_MAX ==="
         echo "Job:       $SLURM_ARRAY_JOB_ID.$SLURM_ARRAY_TASK_ID"

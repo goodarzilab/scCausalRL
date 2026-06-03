@@ -14,9 +14,9 @@
 # (it's a single-step loss; episode-level u accumulation isn't meaningful there).
 
 data:
-  norman_path: "/large_storage/goodarzilab/shervin/scCausalRL/Norman/"
+  norman_path: "/large_storage/goodarzilab/shervin/CausalBioRL/Norman/"
   replogle_path: "/large_storage/goodarzilab/causal_state/pretrain_data/replogle"
-  waddington_path: "/large_storage/goodarzilab/shervin/scCausalRL/Waddington_OT/"
+  waddington_path: "/large_storage/goodarzilab/shervin/CausalBioRL/Waddington_OT/"
   n_hvg: 2000
   dataset: "replogle"
   replogle_cell_line: "k562"
@@ -125,7 +125,7 @@ phase2:
 
 wandb:
   enabled: true
-  project: "scCausalRL"
+  project: "CausalBioRL"
   entity: null
   phase1_run_name: "phase1_replogle_u_score"
   phase2_run_name: "phase2_replogle_u_score"

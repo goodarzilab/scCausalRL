@@ -246,7 +246,7 @@ if __name__ == '__main__':
     # Smoke test
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--norman_path', default='/large_storage/goodarzilab/shervin/scCausalRL/Norman/')
+    parser.add_argument('--norman_path', default='/large_storage/goodarzilab/shervin/CausalBioRL/Norman/')
     parser.add_argument('--replogle_path', default='/large_storage/goodarzilab/causal_state/pretrain_data/replogle')
     parser.add_argument('--n_hvg', type=int, default=2000)
     parser.add_argument('--max_cells', type=int, default=20000)

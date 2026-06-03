@@ -10,14 +10,14 @@
 # Trade-off: ~4% more parameters (D, A, encoder input head), negligible compute.
 
 data:
-  norman_path: "/large_storage/goodarzilab/shervin/scCausalRL/Norman/"
+  norman_path: "/large_storage/goodarzilab/shervin/CausalBioRL/Norman/"
   # Pointed at K562_gwps_filtered.h5ad directly (not the directory) so we get the
   # wider 8,248-gene var space instead of train_v5.h5ad's 4,096. With union HVG
   # this gives 54/105 Norman pert genes evaluable (vs 27 with train_v5).
   # File is already K562-only and has no `cell_line` column — load_replogle.py
   # handles that.
   replogle_path: "/large_storage/goodarzilab/causal_state/pretrain_data/replogle/K562_gwps_filtered.h5ad"
-  waddington_path: "/large_storage/goodarzilab/shervin/scCausalRL/Waddington_OT/"
+  waddington_path: "/large_storage/goodarzilab/shervin/CausalBioRL/Waddington_OT/"
   n_hvg: 2000
   dataset: "replogle"
   replogle_cell_line: "k562"
@@ -99,7 +99,7 @@ phase2:
 
 wandb:
   enabled: true
-  project: "scCausalRL"
+  project: "CausalBioRL"
   entity: null
   phase1_run_name: "phase1_replogle_u_score_union_hvg"
   phase2_run_name: "phase2_replogle_u_score_union_hvg"

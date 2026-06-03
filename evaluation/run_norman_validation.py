@@ -14,7 +14,7 @@ Three correlation baselines for fair comparison:
 Usage:
     python evaluation/run_norman_validation.py \
         --checkpoint checkpoints/phase1_best.pt \
-        --norman_path /large_storage/goodarzilab/shervin/scCausalRL/Norman/
+        --norman_path /large_storage/goodarzilab/shervin/CausalBioRL/Norman/
 """
 import os, sys, argparse, warnings
 import numpy as np
@@ -157,7 +157,7 @@ def main():
     parser.add_argument('--checkpoint', type=str, required=True,
                         help='Replogle-trained CausalVAE checkpoint')
     parser.add_argument('--norman_path', type=str,
-                        default='/large_storage/goodarzilab/shervin/scCausalRL/Norman/')
+                        default='/large_storage/goodarzilab/shervin/CausalBioRL/Norman/')
     parser.add_argument('--n_dag_samples', type=int, default=32)
     parser.add_argument('--output_dir', type=str, default='results/norman_validation')
     parser.add_argument('--device', type=str, default=None)
@@ -168,6 +168,20 @@ def main():
     parser.add_argument('--combo_mode', type=str, default=None,
                         choices=[None, 'parallel', 'sequential'],
                         help="Combo intervention mode for u_score; defaults to config or 'parallel'.")
+    parser.add_argument('--input_mode', type=str, default='target_lfc',
+                        choices=['observed_full', 'target_lfc', 'canonical'],
+                        help="Eval input mode (see run_perturbation_eval.py).")
+    parser.add_argument('--pert_direction', type=int, default=+1,
+                        choices=[-1, 1],
+                        help="Norman is CRISPRa → +1 by default.")
+    parser.add_argument('--canonical_magnitude', type=float, default=2.0)
+    parser.add_argument('--a_mode', type=str, default='learned',
+                        choices=['learned', 'zero', 'shuffled'])
+    parser.add_argument('--gene_idx_mode', type=str, default='correct',
+                        choices=['correct', 'random'])
+    parser.add_argument('--n_ctrl_cells', type=int, default=500)
+    parser.add_argument('--n_ctrl_combo', type=int, default=200)
+    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
     device = torch.device(args.device) if args.device else \
@@ -278,8 +292,14 @@ def main():
     print(f"{'=' * 60}")
     model_single = evaluate_single_perts(
         model, X, data_dict, de_single, gene_names, ctrl_mean,
-        device, n_dag_samples=args.n_dag_samples, n_ctrl_cells=50,
-        scheme=scheme, u_clip_max=u_clip_max)
+        device, n_dag_samples=args.n_dag_samples,
+        n_ctrl_cells=args.n_ctrl_cells,
+        scheme=scheme, u_clip_max=u_clip_max,
+        input_mode=args.input_mode,
+        pert_direction=args.pert_direction,
+        canonical_magnitude=args.canonical_magnitude,
+        a_mode=args.a_mode, gene_idx_mode=args.gene_idx_mode,
+        seed=args.seed)
 
     corr_replogle_single = evaluate_baseline(corr_replogle, gene_to_idx, de_single, gene_names)
     corr_norman_single = evaluate_baseline(corr_norman, gene_to_idx, de_single, gene_names)
@@ -308,7 +328,12 @@ def main():
         model_combo, additive_combo = evaluate_combo_perts(
             model, X, data_dict, de_single, de_combo, gene_names, ctrl_mean,
             device, n_dag_samples=args.n_dag_samples,
-            scheme=scheme, u_clip_max=u_clip_max, combo_mode=combo_mode)
+            n_ctrl_cells=args.n_ctrl_combo,
+            scheme=scheme, u_clip_max=u_clip_max, combo_mode=combo_mode,
+            input_mode=args.input_mode,
+            pert_direction=args.pert_direction,
+            canonical_magnitude=args.canonical_magnitude,
+            seed=args.seed)
 
         # Correlation baselines for combos
         corr_replogle_combo = []

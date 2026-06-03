@@ -20,7 +20,7 @@ Construction:
     4. Each `__getitem__` draws S perturbed cells from one block (with replacement
        if the block has < S cells) and S control cells from that same gem_group.
 
-This is the scCausalRL analogue of STATE's cell-sentence loader
+This is the CausalBioRL analogue of STATE's cell-sentence loader
 (`state-mcp-local/src/state/tx/data/`): same `[B, S, n_genes]` batch shape and the
 same "control/pert paired within the sentence" contract.
 """

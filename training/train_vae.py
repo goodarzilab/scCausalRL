@@ -19,7 +19,7 @@ def _init_wandb(config, run_name_key='phase1_run_name'):
     try:
         import wandb
         run = wandb.init(
-            project=wcfg.get('project', 'scCausalRL'),
+            project=wcfg.get('project', 'CausalBioRL'),
             entity=wcfg.get('entity', None),
             name=wcfg.get(run_name_key, None),
             config={
@@ -488,6 +488,15 @@ def train_vae(config, data_dict=None, device=None):
                     sent_gene = sent['gene_idx'].to(device)         # [B]
                     sent_batch = sent['batch_id'].to(device)        # [B]
                     sent_mod = sent['modality_id'].to(device) if n_modalities > 0 else None
+                    # Build per-sentence pert_direction tensor if the dataset
+                    # exposes per-cell perturbation direction (e.g. combined Norman+Replogle).
+                    # Otherwise default to -1 (CRISPRi-style) — config can override.
+                    default_dir = int(p1.get('pert_direction', -1))
+                    pert_dir_batch = torch.full((sent_gene.shape[0],), default_dir,
+                                                dtype=torch.long, device=device)
+                    # If the sentence dataset attaches a 'pert_direction' column, use it
+                    if 'pert_direction' in sent:
+                        pert_dir_batch = sent['pert_direction'].to(device).long()
                     pert_loss_val, pert_diag = perturbation_set_loss_u(
                         x_ctrl_set, x_pert_set,
                         gene_idx=sent_gene,
@@ -497,6 +506,10 @@ def train_vae(config, data_dict=None, device=None):
                         n_dag_samples=p1.get('pert_n_dag_samples', 8),
                         loss_kind=p1.get('pert_loss_kind', 'energy'),
                         match_delta=p1.get('pert_match_delta', True),  # Phase H default
+                        input_mode=p1.get('input_mode', 'observed_full'),
+                        pert_direction_batch=pert_dir_batch,
+                        canonical_magnitude=float(p1.get('canonical_magnitude', 2.0)),
+                        aux_prop_weight=float(p1.get('aux_prop_weight', 0.0)),
                     )
                 elif len(triples) > 0:
                     # Legacy threshold-mutilation path.  Kept for the
