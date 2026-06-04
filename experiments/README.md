@@ -32,6 +32,10 @@ W&B logging goes to project **CausalBioRL** (set in each config's `wandb:` block
 | 3 | `exp3_shift_mlp` | MLP (2×1024) | learned shift encoder | MSE + MMD | none (no D) |
 | 4 | `exp4_shift_linear_energy` | linear | learned shift encoder | MSE + MMD + **energy** | ortho + D-L1 + GRN prior |
 | 5 | `exp5_shift_mlp_energy` | MLP (2×1024) | learned shift encoder | MSE + MMD + **energy** | none (no D) |
+| 6 | `exp6_shift_linear_mmd_mse` | linear | learned shift encoder | MSE + MMD (energy removed) | ortho + D-L1 + GRN prior |
+| 7 | `exp7_shift_linear_mmd_cosine` | linear | learned shift encoder | **cosine** + MMD | ortho + D-L1 + GRN prior |
+
+**Note (exp6/7):** energy distance removed (it's an MMD with the −‖·‖ kernel — redundant with RBF-MMD and dominated the loss). exp7 swaps the MSE mean-shift term for `1 − cos(Δ̂, Δ_obs)` (direction matching, scale-invariant). Both carry a **grad-norm logging fix**: per-module grad norms are captured in the step block *before* `optimizer.zero_grad()`, so `grad_norm/*` are no longer logged as 0 (the earlier 0 was a read-after-zero_grad artifact — gradients always flowed; verified by checkpoint diff). New loss knob: `phase1.pert_cos_weight`.
 
 ## What changed vs the baseline (exp2–5)
 
