@@ -102,3 +102,5 @@ Thumbs.db
 !configs/*.yaml
 !configs/*.yml
 !requirements.txt
+# executed analysis notebooks (heavy embedded outputs)
+experiments/notebooks/dag_analysis_*_executed.ipynb
