@@ -765,18 +765,27 @@ def main():
               f"{args.pert_direction:+d}")
 
     # ── Step 2: Load split ────────────────────────────────────────────────
+    # Prefer the checkpoint's split; otherwise reconstruct from the data loader.
+    # The periodic phase1_epoch{N}.pt checkpoints don't carry pert_split, but the
+    # split is DETERMINISTIC in split_seed, so the loader reproduces the EXACT
+    # train/val/test split the model held out during training. Falling back to a
+    # fresh split_single_perts would (silently) put trained genes in the test set
+    # and contaminate the "held-out" comparison.
     pert_split = ckpt.get('pert_split', None)
+    if pert_split is None and data_dict.get('pert_split') is not None:
+        pert_split = data_dict['pert_split']
+        print("\n(pert_split not in checkpoint — reconstructed from data loader "
+              "via split_seed; identical to training split)")
     if pert_split is not None:
         # Convert lists back to sets (JSON serialization loses set type)
         pert_split = {k: set(v) for k, v in pert_split.items()}
-        print(f"\nLoaded gene split from checkpoint: "
-              f"{len(pert_split['train'])} train, {len(pert_split['val'])} val, "
+        print(f"Gene split: {len(pert_split['train'])} train, {len(pert_split['val'])} val, "
               f"{len(pert_split['test'])} test")
     else:
-        # No split in checkpoint — create one now (for older checkpoints)
+        # Last resort — older checkpoints with no loader split.
         from data.load_norman import split_single_perts
         pert_split = split_single_perts(data_dict['single_perts'])
-        print(f"\nNo split in checkpoint — created fresh: "
+        print(f"\nNo split anywhere — created fresh (WARNING: may not match training): "
               f"{len(pert_split['train'])} train, {len(pert_split['val'])} val, "
               f"{len(pert_split['test'])} test")
 
