@@ -13,7 +13,7 @@ import pandas as pd
 import scipy.sparse
 
 
-def load_norman_aligned(path, target_gene_names, min_cells_per_pert=5):
+def load_norman_aligned(path, target_gene_names, min_cells_per_pert=5, src_n_hvg=2000):
     """
     Load Norman and align to a fixed gene set.
 
@@ -31,7 +31,10 @@ def load_norman_aligned(path, target_gene_names, min_cells_per_pert=5):
     # Reuse Norman's full loader (handles MTX parsing, perturbation classification,
     # HVG selection, DE precomputation). We'll then re-align gene axis.
     print(f"Loading Norman from {path}...")
-    norman = load_norman(path=path, n_hvg=2000)  # HVG selection inside; we override below
+    # force_include the target genes so EVERY K562-axis gene present in raw Norman
+    # survives HVG filtering (otherwise only Norman's top-n_hvg ∩ target survive,
+    # which zero-imputes ~90% of the axis and cripples the external eval).
+    norman = load_norman(path=path, n_hvg=src_n_hvg, force_include=list(target_gene_names))
 
     src_adata = norman['adata']
     src_gene_names = list(src_adata.var_names)

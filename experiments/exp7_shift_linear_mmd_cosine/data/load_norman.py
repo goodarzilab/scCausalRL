@@ -68,7 +68,7 @@ def split_single_perts(single_perts, train_frac=0.8, val_frac=0.1, seed=42):
     }
 
 
-def load_norman(path=None, n_hvg=2000, **kwargs):
+def load_norman(path=None, n_hvg=2000, force_include=None, **kwargs):
     """
     Load Norman et al. 2019 K562 Perturb-seq dataset from raw MTX format.
 
@@ -167,7 +167,7 @@ def load_norman(path=None, n_hvg=2000, **kwargs):
 
     # Preprocess
     print("  Preprocessing (HVG selection, normalization, PCA)...")
-    adata = preprocess(adata, n_hvg=n_hvg)
+    adata = preprocess(adata, n_hvg=n_hvg, force_include=force_include)
     print(f"  After preprocessing: {adata.shape}")
 
     # Build index dicts
