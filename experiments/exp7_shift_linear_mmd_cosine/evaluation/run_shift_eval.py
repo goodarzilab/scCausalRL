@@ -330,12 +330,24 @@ def main():
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     X_ctrl = X[data_dict['control_idx']]
 
+    # Prefer the split saved in the checkpoint; otherwise reconstruct it from the
+    # data loader. The periodic phase1_epoch{N}.pt checkpoints only carry
+    # epoch/model/config/gene_names (pert_split is saved only in phase1_best.pt),
+    # but the split is DETERMINISTIC in split_seed, so loading the same config
+    # reproduces the identical train/val/test gene split used during training.
     pert_split = ckpt.get('pert_split', None)
+    if pert_split is None:
+        pert_split = data_dict.get('pert_split', None)
+        if pert_split is not None:
+            print("  (pert_split not in checkpoint — reconstructed from data loader "
+                  "via split_seed; identical to training split)")
     if pert_split is not None:
         pert_split = {k: set(v) for k, v in pert_split.items()}
         print(f"Split: {len(pert_split['train'])} train / {len(pert_split['test'])} test genes")
     else:
-        raise RuntimeError("checkpoint has no pert_split — cannot do held-out eval")
+        raise RuntimeError(
+            "no pert_split in checkpoint OR data_dict — cannot do held-out eval. "
+            "Ensure the dataset loader produces a pert_split (split_seed set).")
 
     print("\nComputing observed DE...")
     de_single, de_combo, ctrl_mean = compute_observed_de(X, data_dict, gene_names)
