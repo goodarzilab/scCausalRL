@@ -158,6 +158,44 @@ plt.plot([0,1],[0,1],'r--', label='random')
 plt.xlabel('FPR'); plt.ylabel('TPR'); plt.legend(); plt.title('CollecTRI edge recovery (correlation overlaid in §5)')
 plt.savefig(f'{OUT_DIR}/collectri_roc_grn.png', dpi=170, bbox_inches='tight'); plt.show()""")
 
+md("""### 2b. Did the margin-ranking prior loss shift prior-edge weights up?
+
+`biological_prior_loss` is a margin-ranking that pushes CollecTRI edges **above**
+random background edges on `G_feat = D·A·Dᵀ`. If it worked, the weight
+distribution of in-prior edges (red) should sit to the **right** of the
+not-in-prior background (white). NOTE the loss optimizes `G_feat` built from edge
+**probabilities** (`get_edge_probs`), so we show both that matrix (right panel —
+faithful to the loss) and the signed inference GRN (left panel).""")
+code("""from scipy.stats import mannwhitneyu as _mwu
+G_prob = D @ A_probs @ D.T                      # what the prior margin-loss optimizes
+np.fill_diagonal(G_prob, 0.0)
+prior_off = prior[offdiag]                      # bool aligned with vals = mat[offdiag]
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+for ax, (mat, title) in zip(axes, [(GRN, 'signed GRN  D·A_signed·Dᵀ  (inference)'),
+                                   (G_prob, 'G_feat  D·A_prob·Dᵀ  (prior-loss target)')]):
+    vals = mat[offdiag]
+    bg = vals[~prior_off]; sig = vals[prior_off]
+    U, p = _mwu(sig, bg, alternative='greater')   # H1: prior edges > background
+    lo, hi = np.percentile(vals, [0.3, 99.7]); bins = np.linspace(lo, hi, 120)
+    ax.hist(bg, bins=bins, density=True, color='white', edgecolor='#777', lw=0.6,
+            label=f'not in prior (n={bg.size:,})')
+    ax.hist(sig, bins=bins, density=True, color='red', alpha=0.55, edgecolor='darkred',
+            label=f'in CollecTRI (n={sig.size:,})')
+    ax.axvline(np.median(bg), color='#777', ls='--', lw=1.2)
+    ax.axvline(np.median(sig), color='red', ls='--', lw=1.2)
+    ax.set_xlabel('edge weight'); ax.set_ylabel('density'); ax.legend(fontsize=8)
+    ax.set_title(f'{title}\\nmedian: prior={np.median(sig):.2e}  bg={np.median(bg):.2e}   '
+                 f'MWU(prior>bg) p={p:.1e}', fontsize=10)
+    ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
+plt.tight_layout(); plt.savefig(f'{OUT_DIR}/prior_edge_weight_shift.png', dpi=170, bbox_inches='tight'); plt.show()
+# record the loss-faithful (probability G_feat) shift
+_vp = G_prob[offdiag]; _U, _p = _mwu(_vp[prior_off], _vp[~prior_off], alternative='greater')
+scorecard.update(prior_shift_mwu_p=float(_p),
+                 prior_edge_median=float(np.median(_vp[prior_off])),
+                 bg_edge_median=float(np.median(_vp[~prior_off])))
+print(f"prior-loss G_feat: in-prior median={np.median(_vp[prior_off]):.3e}  "
+      f"background median={np.median(_vp[~prior_off]):.3e}  MWU(prior>bg) p={_p:.2e}")""")
+
 md("""## 3. Causal directionality — TF→target vs target→TF asymmetry
 
 A *correlation* network is symmetric: `G[i,j] == G[j,i]`. A *causal* network should
