@@ -292,6 +292,65 @@ scorecard.update(latent_offdiag_corr=float(off.mean()))
 plt.figure(figsize=(5.5, 5)); sns.heatmap(np.abs(zc), cmap='magma', vmax=0.5)
 plt.title('|corr| between latent z dims'); plt.savefig(f'{OUT_DIR}/latent_corr.png', dpi=170, bbox_inches='tight'); plt.show()""")
 
+md("""### 5b. Held-out CollecTRI recovery — copying the prior, or generalizing? (exp9)
+
+If the model was trained with a prior-edge holdout (`phase1.prior_train_frac < 1`,
+e.g. holding out whole TFs), this asks the un-tautological question: does `G`
+score the **held-out** CollecTRI edges (never supervised) above background, and
+above the correlation floor? Copying ⇒ held-out AUROC ≈ chance while train-edge
+AUROC is high. Generalizing ⇒ held-out AUROC clearly beats the corr floor.
+No-op for full-supervision checkpoints.""")
+code("""ptf = (ckpt.get('config', {}) or {}).get('phase1', {})
+prior_train_frac = float(ptf.get('prior_train_frac', 1.0))
+if prior_train_frac < 1.0:
+    from utils.bio_priors import split_collectri_edges
+    name_pairs = list(zip(pairs['source'], pairs['target']))      # uppercase, in gene set
+    train_set, test_set = split_collectri_edges(
+        name_pairs, prior_train_frac=prior_train_frac,
+        prior_split_seed=int(ptf.get('prior_split_seed', 0)),
+        prior_split_mode=ptf.get('prior_split_mode', 'tf'))
+    prior_train = np.zeros((n_genes, n_genes), bool); prior_test = np.zeros((n_genes, n_genes), bool)
+    for s, t in train_set:
+        if s != t: prior_train[gidx[s], gidx[t]] = True
+    for s, t in test_set:
+        if s != t: prior_test[gidx[s], gidx[t]] = True
+
+    def split_auroc(pos_mask, other_mask, score):
+        # positives = this split's edges; negatives = true non-edges (exclude the
+        # OTHER split so train/test edges never pollute each other's negatives).
+        keep = offdiag & ~other_mask
+        yv = pos_mask[keep].astype(int); sv = np.abs(score)[keep]
+        return roc_auc_score(yv, sv) if 0 < yv.sum() < yv.size else np.nan
+
+    grn_train = split_auroc(prior_train, prior_test, GRN)
+    grn_test = split_auroc(prior_test, prior_train, GRN)          # ← the held-out number
+    corr_test = split_auroc(prior_test, prior_train, corr)        # ← the floor
+    gprob_test = split_auroc(prior_test, prior_train, G_prob)
+    print(f"Held-out CollecTRI recovery (mode={ptf.get('prior_split_mode','tf')}, "
+          f"train_frac={prior_train_frac}):  {int(prior_train.sum())} train / {int(prior_test.sum())} held-out edges")
+    print(f"  |GRN|  train-edge AUROC = {grn_train:.4f}   held-out AUROC = {grn_test:.4f}")
+    print(f"  G_prob held-out AUROC  = {gprob_test:.4f}")
+    print(f"  correlation held-out FLOOR AUROC = {corr_test:.4f}")
+    verdict = ('COPYING (held-out≈chance)' if grn_test < 0.55 else
+               ('GENERALIZING (held-out > corr floor)' if grn_test > corr_test + 0.03 else 'AMBIGUOUS'))
+    print(f"  ⇒ {verdict}")
+    scorecard.update(grn_heldout_auroc=float(grn_test), grn_trainedge_auroc=float(grn_train),
+                     corr_heldout_floor_auroc=float(corr_test), gprob_heldout_auroc=float(gprob_test),
+                     prior_split_mode=ptf.get('prior_split_mode', 'tf'), prior_train_frac=prior_train_frac)
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for mask, other, lab, col in [(prior_train, prior_test, f'train edges ({grn_train:.3f})', '#2171b5'),
+                                  (prior_test, prior_train, f'held-out ({grn_test:.3f})', '#41ab5d')]:
+        keep = offdiag & ~other
+        fpr, tpr, _ = roc_curve(mask[keep].astype(int), np.abs(GRN)[keep]); ax.plot(fpr, tpr, color=col, lw=2, label=lab)
+    keep = offdiag & ~prior_train
+    fpr, tpr, _ = roc_curve(prior_test[keep].astype(int), corr[keep]); ax.plot(fpr, tpr, '--', color='#bdbdbd', lw=2, label=f'corr held-out floor ({corr_test:.3f})')
+    ax.plot([0, 1], [0, 1], 'r:'); ax.legend(); ax.set_xlabel('FPR'); ax.set_ylabel('TPR')
+    ax.set_title('Held-out CollecTRI recovery: train vs held-out vs corr floor')
+    plt.savefig(f'{OUT_DIR}/collectri_heldout_roc.png', dpi=170, bbox_inches='tight'); plt.show()
+else:
+    print("prior_train_frac = 1.0 (no holdout) — held-out recovery N/A. "
+          "Run an exp9 cell with prior_train_frac < 1 to assess copying vs generalizing.")""")
+
 md("## 6. Perturbed vs control separation (UMAP + linear separability)")
 code("""import umap
 from sklearn.linear_model import LogisticRegression
