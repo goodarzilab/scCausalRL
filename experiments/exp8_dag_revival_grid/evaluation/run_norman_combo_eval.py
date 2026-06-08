@@ -156,23 +156,42 @@ def main():
         # 2. additive_obs (observed singles — standard null)
         pred_add_obs = de_single[ga]['lfc'] + de_single[gb]['lfc']
 
-        # 3. shift_uscore (u-score mutilation, shift-fed, zero-shot)
+        # 3. shift_uscore (u-score mutilation, shift-fed, ZERO-SHOT: dx = model's
+        #    shift-predicted single delta D·z_S, not sparse one-hot and not leaky obs)
+        # 4. uscore_obs (same mutilation operator but fed the OBSERVED singles —
+        #    isolates the operator's epistasis-capture from single-prediction quality)
         with torch.no_grad():
             dx_a = torch.tensor(pred_single[ga], dtype=torch.float32, device=device)
             dx_b = torch.tensor(pred_single[gb], dtype=torch.float32, device=device)
             z_post_u, u_combo, _ = model.intervene_combo_u(
-                eps_ctrl, [dx_a, dx_b], A, z_prev, [gi_a, gi_b],
-                u_clip_max=model.u_clip_max)
+                eps_ctrl, [dx_a, dx_b], A, z_prev, [gi_a, gi_b], u_clip_max=model.u_clip_max)
             pred_uscore = model.decoder(z_post_u).mean(0).cpu().numpy() - ctrl_recon
+            ox_a = torch.tensor(de_single[ga]['lfc'], dtype=torch.float32, device=device)
+            ox_b = torch.tensor(de_single[gb]['lfc'], dtype=torch.float32, device=device)
+            z_post_uo, _, _ = model.intervene_combo_u(
+                eps_ctrl, [ox_a, ox_b], A, z_prev, [gi_a, gi_b], u_clip_max=model.u_clip_max)
+            pred_uscore_obs = model.decoder(z_post_uo).mean(0).cpu().numpy() - ctrl_recon
 
         # non-additivity of the u-score predictor
         nonadd = float(np.linalg.norm(pred_uscore - pred_shift_add) /
                        (np.linalg.norm(pred_shift_add) + 1e-8))
 
+        # observed epistasis (genetic-interaction strength): how far the OBSERVED
+        # combo deviates from observed-additive, on the combo's DEGs (targets masked).
+        # 0 = perfectly additive; larger = more epistatic/non-linear. Independent of
+        # any model prediction (the tertile axis).
+        deg_eval = obs_sig & mask
+        epistasis = np.nan; epi_add_pearson = np.nan
+        if int(deg_eval.sum()) >= 3:
+            resid = (obs_lfc - pred_add_obs)[deg_eval]
+            epistasis = float(np.linalg.norm(resid) / (np.linalg.norm(obs_lfc[deg_eval]) + 1e-8))
+            epi_add_pearson = float(spearmanr(obs_lfc[deg_eval], pred_add_obs[deg_eval])[0])
+
         r = {'combo': f'{ga}+{gb}', 'n_cells': de['n_cells'], 'n_de': int(obs_sig[mask].sum()),
-             'u_combo_sum': float(u_combo.sum().item()), 'nonadditivity': nonadd}
+             'u_combo_sum': float(u_combo.sum().item()), 'nonadditivity': nonadd,
+             'epistasis': epistasis, 'epi_add_spearman': epi_add_pearson}
         for pname, pred in [('shift_add', pred_shift_add), ('additive_obs', pred_add_obs),
-                            ('shift_uscore', pred_uscore)]:
+                            ('shift_uscore', pred_uscore), ('uscore_obs', pred_uscore_obs)]:
             for mk, mv in _score(pred, obs_lfc, obs_eff, obs_sig, mask).items():
                 r[f'{pname}_{mk}'] = mv
         # correlation baseline (avg of the two genes' corr rows as the "combo signature")
@@ -184,7 +203,7 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(args.output_dir, 'combo_per_pert.csv'), index=False)
 
-    methods = ['shift_add', 'additive_obs', 'shift_uscore', 'corr']
+    methods = ['shift_add', 'additive_obs', 'shift_uscore', 'uscore_obs', 'corr']
     col = lambda c: (df[c].tolist() if c in df.columns else [])
     summary = {'n_combos': len(df), 'compose_vs_shiftadd_max_gap': max_compose_gap,
                'mean_nonadditivity': float(df['nonadditivity'].mean()),
