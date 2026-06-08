@@ -76,6 +76,8 @@ def main():
     ap.add_argument('--output_dir', default='results/norman_combo')
     ap.add_argument('--n_ctrl_cells', type=int, default=500)
     ap.add_argument('--min_cells_per_pert', type=int, default=5)
+    ap.add_argument('--u_clip_max', type=float, default=None,
+                    help="override the model's u_clip_max for the shift_uscore mutilation operator")
     ap.add_argument('--seed', type=int, default=42)
     ap.add_argument('--device', default=None)
     args = ap.parse_args()
@@ -87,6 +89,9 @@ def main():
     config = yaml.safe_load(open(args.config))
     norman_path = args.norman_path or config['data']['norman_path']
     model, gene_names, ckpt = load_shift_model(args.checkpoint, device)
+    if args.u_clip_max is not None:
+        model.u_clip_max = float(args.u_clip_max)
+        print(f"[override] u_clip_max = {model.u_clip_max}")
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     n_genes = len(gene_names); d = model.latent_dim
 
