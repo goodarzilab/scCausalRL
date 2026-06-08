@@ -1,0 +1,83 @@
+data:
+  norman_path: /large_storage/goodarzilab/shervin/CausalBioRL/Norman/
+  replogle_path: /large_storage/ctc/userspace/aadduri/revisions/replogle_unfiltered/K562_essential_raw_singlecell_01.h5ad
+  waddington_path: /large_storage/goodarzilab/shervin/CausalBioRL/Waddington_OT/
+  n_hvg: 8000
+  dataset: norman
+  split_seed: 42
+  single_pert_train_frac: 0.8
+  single_pert_val_frac: 0.1
+model:
+  latent_dim: 64
+  tau_init: 1.0
+  tau_min: 0.25
+  n_dag_samples: 16
+  dagma_s: 1.0
+  decoder_type: linear
+  use_shift_encoder: true
+  shift_label_dim: 50
+  shift_hidden: 1024
+  shift_n_layers: 1
+  shift_output_activation: none
+  shift_scale_init: 1.0
+  shift_pca_max_ctrl: 2000
+phase1:
+  n_epochs: 150
+  batch_size: 256
+  lr: 0.001
+  beta_start: 0.01
+  beta_end: 0.5
+  beta_anneal_epochs: 50
+  lambda_pert: 10.0
+  lambda_sparse: 0.0
+  lambda_sparse_mode: product
+  lambda_spectral: 0.1
+  lambda_ortho: 1.0
+  lambda_D_sparse: 30.0
+  lambda_prior: 10.0
+  prior_margin: 0.5
+  dagma_rho_init: 0.0
+  dagma_rho_max: 0.0
+  dagma_lambda_init: 0.0
+  reconstruction_phase_epochs: 20
+  lr_warmup_epochs: 5
+  dag_warmin_epochs: 10
+  accumulation_steps: 4
+  pert_n_dag_samples: 1
+  cell_sentence_S: 64
+  n_sentences_per_block: 4
+  min_block_cells: 3
+  sentence_batch_size: 8
+  pert_mse_weight: 1.0
+  pert_cos_weight: 0.0
+  pert_mmd_weight: 1.0
+  pert_energy_weight: 0.0
+  pert_shift_l1: 0.0
+intervention:
+  scheme: shift
+  u_clip_max: 0.5
+phase2:
+  n_iterations: 50000
+  vae_lr: 0.0001
+  policy_lr: 0.0003
+  critic_lr: 0.001
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coeff: 0.01
+  value_coeff: 0.5
+  max_grad_norm: 0.5
+  n_epochs_per_update: 4
+  n_steps_per_rollout: 2048
+  ppo_batch_size: 64
+  max_episode_steps: 3
+  n_actions_per_gene: 2
+wandb:
+  enabled: true
+  project: CausalBioRL
+  entity: null
+  phase1_run_name: exp11_norman_shift_sl0_ls0
+  phase2_run_name: exp6_shift_linear_mmd_mse_phase2
+eval:
+  n_dag_samples: 32
+  combo_holdout_frac: 1.0
