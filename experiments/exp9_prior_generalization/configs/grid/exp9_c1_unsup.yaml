@@ -54,7 +54,7 @@ phase1:
   pert_cos_weight: 0.0
   pert_mmd_weight: 1.0
   pert_energy_weight: 0.0
-  pert_shift_l1: 0.5
+  pert_shift_l1: 0.1
   prior_split_seed: 42
 intervention:
   scheme: shift
@@ -79,7 +79,7 @@ wandb:
   enabled: true
   project: CausalBioRL
   entity: null
-  phase1_run_name: exp9_c1_unsup
+  phase1_run_name: exp9_c1_unsup_sl0p1
   phase2_run_name: exp6_shift_linear_mmd_mse_phase2
 eval:
   n_dag_samples: 32
