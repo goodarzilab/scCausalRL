@@ -33,11 +33,12 @@ def main():
     ap.add_argument('--cell', default='exp8_sl0p0_ls0p0')
     ap.add_argument('--label', default=None)
     ap.add_argument('--exp', default='exp8_dag_revival_grid')
+    ap.add_argument('--combo_csv', default=None, help='direct path to combo_per_pert.csv (overrides --exp/--cell)')
     ap.add_argument('--out', default=os.path.join(ROOT, 'figures'))
     args = ap.parse_args()
     label = args.label or args.cell
     os.makedirs(args.out, exist_ok=True)
-    csv = os.path.join(ROOT, args.exp, 'results/grid', args.cell, 'norman_combo', 'combo_per_pert.csv')
+    csv = args.combo_csv or os.path.join(ROOT, args.exp, 'results/grid', args.cell, 'norman_combo', 'combo_per_pert.csv')
     df = pd.read_csv(csv)
     df = df[df['epistasis'].notna() & df['shift_add_auroc'].notna()].copy()
     # tertiles of observed epistasis (low/mid/high genetic interaction)
