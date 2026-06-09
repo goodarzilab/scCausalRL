@@ -145,7 +145,9 @@ def _scm_solve(LHS, rhs):
 
 def evaluate_single_perts_shift(model, X, data_dict, de_dict, gene_names, device,
                                 n_ctrl_cells=500, c_mode='fixed',
-                                c_grid=None, n_dist_cells=256, seed=42):
+                                c_grid=None, n_dist_cells=256, seed=42,
+                                mutilate=False, mut_u_mode='loading',
+                                mut_u_max=0.5, mut_beta=1.0):
     """Predict held-out single perturbations through the learned shift pathway.
 
     c_mode: 'fixed'  → c=1 (use the learned shift_scale; strict, no leak)
@@ -189,22 +191,30 @@ def evaluate_single_perts_shift(model, X, data_dict, de_dict, gene_names, device
         obs_lfc_t = torch.tensor(obs_lfc, dtype=torch.float32, device=device)
 
         with torch.no_grad():
-            S = model.compute_shift(torch.tensor([gi], device=device))   # [1, d]
-            z_S = torch.clamp(_scm_solve(LHS, S), -20, 20)               # [1, d]
-
-            # ── penetrance c (closed-form latent superposition; decode per c) ──
             chosen_c = 1.0
-            if c_mode == 'search':
-                z_post_c = z_prev.unsqueeze(0) + c_grid_t[:, None, None] * z_S.unsqueeze(0)  # [C, Nc, d]
-                C = z_post_c.shape[0]
-                x_hat_c = model.decoder(z_post_c.reshape(-1, d)).reshape(C, -1, n_genes)
-                pred_de_c = x_hat_c.mean(1) - torch.tensor(ctrl_recon_mean, device=device)  # [C, G]
-                mse_c = ((pred_de_c - obs_lfc_t[None, :]) ** 2).mean(1)                       # [C]
-                chosen_c = float(c_grid_t[int(torch.argmin(mse_c))].item())
-
-            z_post = torch.clamp(z_prev + chosen_c * z_S, -20, 20)        # [Nc, d]
-            x_hat_post = model.decoder(z_post)                            # [Nc, G]
-            pred_mean = x_hat_post.mean(0).cpu().numpy()
+            if mutilate:
+                # COHERENT mutilation forward (same operator the model was trained with):
+                # shift defines the target, do-operator propagates it. No penetrance search.
+                z_post, _u = model.intervene_shift_mutilate(
+                    eps_ctrl, [gi], A_eval, z_prev,
+                    u_mode=mut_u_mode, u_clip_max=mut_u_max, shift_beta=mut_beta)
+                z_post = torch.clamp(z_post, -20, 20)                     # [Nc, d]
+                x_hat_post = model.decoder(z_post)
+                pred_mean = x_hat_post.mean(0).cpu().numpy()
+            else:
+                S = model.compute_shift(torch.tensor([gi], device=device))   # [1, d]
+                z_S = torch.clamp(_scm_solve(LHS, S), -20, 20)               # [1, d]
+                # ── penetrance c (closed-form latent superposition; decode per c) ──
+                if c_mode == 'search':
+                    z_post_c = z_prev.unsqueeze(0) + c_grid_t[:, None, None] * z_S.unsqueeze(0)  # [C, Nc, d]
+                    C = z_post_c.shape[0]
+                    x_hat_c = model.decoder(z_post_c.reshape(-1, d)).reshape(C, -1, n_genes)
+                    pred_de_c = x_hat_c.mean(1) - torch.tensor(ctrl_recon_mean, device=device)  # [C, G]
+                    mse_c = ((pred_de_c - obs_lfc_t[None, :]) ** 2).mean(1)                       # [C]
+                    chosen_c = float(c_grid_t[int(torch.argmin(mse_c))].item())
+                z_post = torch.clamp(z_prev + chosen_c * z_S, -20, 20)        # [Nc, d]
+                x_hat_post = model.decoder(z_post)                            # [Nc, G]
+                pred_mean = x_hat_post.mean(0).cpu().numpy()
 
         pred_de = pred_mean - ctrl_recon_mean
 
@@ -330,6 +340,16 @@ def main():
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     X_ctrl = X[data_dict['control_idx']]
 
+    # Detect mutilation-trained checkpoints → eval with the SAME (coherent) operator.
+    _p1 = (ckpt.get('config', {}) or {}).get('phase1', {})
+    MUT = _p1.get('pert_loss_mode', 'shift') == 'shift_mutilate'
+    MUT_KW = dict(mutilate=MUT, mut_u_mode=_p1.get('pert_mutilate_u_mode', 'loading'),
+                  mut_u_max=float(_p1.get('pert_mutilate_u_max', 0.5)),
+                  mut_beta=float(_p1.get('pert_mutilate_beta', 1.0)))
+    if MUT:
+        print(f"[single-eval] mutilation-coherent: u_mode={MUT_KW['mut_u_mode']} "
+              f"u_max={MUT_KW['mut_u_max']} beta={MUT_KW['mut_beta']}")
+
     # Prefer the split saved in the checkpoint; otherwise reconstruct it from the
     # data loader. The periodic phase1_epoch{N}.pt checkpoints only carry
     # epoch/model/config/gene_names (pert_split is saved only in phase1_best.pt),
@@ -371,7 +391,7 @@ def main():
             model_res = evaluate_single_perts_shift(
                 model, X, data_dict, de_split, gene_names, device,
                 n_ctrl_cells=args.n_ctrl_cells, c_mode=cm,
-                n_dist_cells=args.n_dist_cells, seed=args.seed)
+                n_dist_cells=args.n_dist_cells, seed=args.seed, **MUT_KW)
             tag = f"Shift model (c={cm})"
             rows.append((tag, model_res))
             all_rows[f'{split_name}_model_{cm}'] = model_res

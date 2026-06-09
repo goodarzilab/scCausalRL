@@ -92,6 +92,16 @@ def main():
     if args.u_clip_max is not None:
         model.u_clip_max = float(args.u_clip_max)
         print(f"[override] u_clip_max = {model.u_clip_max}")
+    # mutilation params from the checkpoint's training config (coherent eval): if the
+    # model was trained with the mutilation operator, shift_uscore uses the SAME
+    # operator/clamp it was trained with (intervene_shift_mutilate), not the loading
+    # bolt-on. Falls back to loading-clamp for additively-trained models.
+    _p1 = (ckpt.get('config', {}) or {}).get('phase1', {})
+    MUT_TRAINED = _p1.get('pert_loss_mode', 'shift') == 'shift_mutilate'
+    U_MODE = _p1.get('pert_mutilate_u_mode', 'loading')
+    U_MAX = float(args.u_clip_max) if args.u_clip_max is not None else float(_p1.get('pert_mutilate_u_max', model.u_clip_max))
+    BETA = float(_p1.get('pert_mutilate_beta', 1.0))
+    print(f"[combo] mutilation-trained={MUT_TRAINED}  u_mode={U_MODE}  u_max={U_MAX}  beta={BETA}")
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
     n_genes = len(gene_names); d = model.latent_dim
 
@@ -156,20 +166,21 @@ def main():
         # 2. additive_obs (observed singles — standard null)
         pred_add_obs = de_single[ga]['lfc'] + de_single[gb]['lfc']
 
-        # 3. shift_uscore (u-score mutilation, shift-fed, ZERO-SHOT: dx = model's
-        #    shift-predicted single delta D·z_S, not sparse one-hot and not leaky obs)
-        # 4. uscore_obs (same mutilation operator but fed the OBSERVED singles —
-        #    isolates the operator's epistasis-capture from single-prediction quality)
+        # 3. shift_uscore — shift-fed mutilation, COHERENT with training: uses
+        #    intervene_shift_mutilate with the trained u_mode/clamp (the shift defines
+        #    the target internally, the do-operator propagates it).
+        # 4. uscore_obs — observed-fed loading mutilation (reference: operator quality
+        #    given perfect singles, independent of the shift's single-prediction).
         with torch.no_grad():
-            dx_a = torch.tensor(pred_single[ga], dtype=torch.float32, device=device)
-            dx_b = torch.tensor(pred_single[gb], dtype=torch.float32, device=device)
-            z_post_u, u_combo, _ = model.intervene_combo_u(
-                eps_ctrl, [dx_a, dx_b], A, z_prev, [gi_a, gi_b], u_clip_max=model.u_clip_max)
+            z_post_u, u_vec = model.intervene_shift_mutilate(
+                eps_ctrl, [gi_a, gi_b], A, z_prev,
+                u_mode=U_MODE, u_clip_max=U_MAX, shift_beta=BETA)
             pred_uscore = model.decoder(z_post_u).mean(0).cpu().numpy() - ctrl_recon
+            u_combo = u_vec
             ox_a = torch.tensor(de_single[ga]['lfc'], dtype=torch.float32, device=device)
             ox_b = torch.tensor(de_single[gb]['lfc'], dtype=torch.float32, device=device)
             z_post_uo, _, _ = model.intervene_combo_u(
-                eps_ctrl, [ox_a, ox_b], A, z_prev, [gi_a, gi_b], u_clip_max=model.u_clip_max)
+                eps_ctrl, [ox_a, ox_b], A, z_prev, [gi_a, gi_b], u_clip_max=U_MAX)
             pred_uscore_obs = model.decoder(z_post_uo).mean(0).cpu().numpy() - ctrl_recon
 
         # non-additivity of the u-score predictor
