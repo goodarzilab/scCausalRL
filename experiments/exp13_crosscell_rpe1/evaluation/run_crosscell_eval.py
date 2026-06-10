@@ -25,6 +25,7 @@ def main():
     ap.add_argument('--celline_path', required=True); ap.add_argument('--cell_line', default='rpe1')
     ap.add_argument('--output_dir', default='results/crosscell'); ap.add_argument('--device', default=None)
     ap.add_argument('--max_cells', type=int, default=200000); ap.add_argument('--n_ctrl_cells', type=int, default=500)
+    ap.add_argument('--max_perts', type=int, default=400, help="subsample this many held-out perts for speed (0=all)")
     args = ap.parse_args(); os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device(args.device) if args.device else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -50,11 +51,20 @@ def main():
     de_single, _, ctrl_mean = compute_observed_de(X, dd, gene_names)
     corr = compute_correlation_matrix(X[dd['control_idx']], gene_names)
 
+    # subsample perts for speed — 400 random perts gives a tight AUROC SEM and avoids
+    # the per-pert distributional-metric cost blowing past the walltime (2164 perts → >1h).
+    if args.max_perts and len(de_single) > args.max_perts:
+        import random
+        keep = random.Random(0).sample(sorted(de_single.keys()), args.max_perts)
+        de_single = {k: de_single[k] for k in keep}
+        print(f"subsampled to {len(de_single)} perts (of {n_ext}) for speed")
+    n_eval = len(de_single)
+
     res = evaluate_single_perts_shift(model, X, dd, de_single, gene_names, device,
                                       n_ctrl_cells=args.n_ctrl_cells, c_mode='fixed', **MUT_KW)
     corr_res = evaluate_baseline(corr, gene_to_idx, de_single, gene_names)
 
-    summary = {'cell_line': args.cell_line, 'n_external_perts': n_ext,
+    summary = {'cell_line': args.cell_line, 'n_external_perts': n_ext, 'n_evaluated': n_eval,
                'model_auroc': _safe_mean(_extract(res, 'auroc')),
                'model_pearson_deg': _safe_mean(_extract(res, 'pearson_deg')),
                'model_spearman': _safe_mean(_extract(res, 'spearman')),
