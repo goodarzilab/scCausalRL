@@ -5,7 +5,7 @@ data:
     hepg2: /large_storage/ctc/userspace/aadduri/revisions/replogle_unfiltered/GSE264667_hepg2_raw_singlecell_01.h5ad
     jurkat: /large_storage/ctc/userspace/aadduri/revisions/replogle_unfiltered/GSE264667_jurkat_raw_singlecell_01.h5ad
     rpe1: /large_storage/ctc/userspace/aadduri/revisions/replogle_unfiltered/rpe1_normalized_singlecell_01.h5ad
-  max_cells_per_line: 150000
+  max_cells_per_line: 350000
   n_hvg: 8000
   split_seed: 42
   single_pert_train_frac: 0.8
