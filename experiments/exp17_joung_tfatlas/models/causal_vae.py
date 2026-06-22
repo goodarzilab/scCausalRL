@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 from .encoder import CausalEncoder
 from .decoder import LinearDecoder, MLPDecoder
-from .dag import DAGModule
+from .dag import DAGModule, _robust_solve
 from .shift_encoder import ShiftEncoder
 
 
@@ -143,7 +143,7 @@ class CausalVAE(nn.Module):
         S = self.compute_shift(gi).sum(dim=0)                        # [d] — summed shift
         d = self.latent_dim
         I = torch.eye(d, device=epsilon.device, dtype=epsilon.dtype)
-        z_S = torch.linalg.solve(I - A.T, S)                         # [d]
+        z_S = _robust_solve(I - A.T, S)                         # [d]
         z_target = z_prev + z_S.unsqueeze(0)                         # [B, d]
         # per-program intervention strength u (SET semantics: sum over the genes)
         if u_mode == 'shift':
@@ -231,7 +231,7 @@ class CausalVAE(nn.Module):
         d = self.latent_dim
         DtD = D.T @ D + 1e-6 * torch.eye(d, device=D.device)  # [d, d]
         Dt_dx = D.T @ dx  # [d]
-        return torch.linalg.solve(DtD, Dt_dx)  # [d]
+        return _robust_solve(DtD, Dt_dx)  # [d]
 
     def get_latent_for_gene_v2(self, dx, A):
         """

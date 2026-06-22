@@ -131,6 +131,8 @@ class DAGModule(nn.Module):
         spectral_radius_penalty; ~no-op when ‖A‖₂ < max_sn (scale=1, gradient passes through).
         """
         d = A.shape[-1]
+        if not torch.isfinite(A).all():                                  # guard a diverged A
+            A = torch.nan_to_num(A, nan=0.0, posinf=1.0, neginf=-1.0)
         with torch.no_grad():                                            # detach the iteration
             v = torch.randn(*A.shape[:-2], d, 1, device=A.device, dtype=A.dtype)
             v = v / (v.norm(dim=-2, keepdim=True) + 1e-8)

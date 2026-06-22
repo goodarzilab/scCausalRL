@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from models.dag import _robust_solve  # singular-safe (I - A^T) solve; see dag.py
 
 # Optional dependency — geomloss provides the Sinkhorn / energy / Cramer OT losses
 # used by STATE. If unavailable, perturbation_set_loss_u falls back to the in-house
@@ -256,7 +257,7 @@ def perturbation_set_loss_u(
     D = model.decoder.D.detach()                                   # [G, d]
     DtD = D.T @ D + 1e-6 * torch.eye(d, device=device, dtype=D.dtype)  # [d, d]
     Dt_dx_T = D.T @ dx_input.T                                     # [d, B]   (sparse if Task-A)
-    dz_all = torch.linalg.solve(DtD, Dt_dx_T).T                    # [B, d]
+    dz_all = _robust_solve(DtD, Dt_dx_T).T                    # [B, d]
 
     # Sample N DAGs (in eval this is N=8 for uncertainty; in training default N=1).
     A_batch = model.dag.sample_A(n_samples=n_dag_samples)           # [N, d, d]
@@ -269,7 +270,7 @@ def perturbation_set_loss_u(
     # RHS [N, d, B*S]: stack eps_ctrl as columns for each N
     rhs_prev = eps_ctrl_set.reshape(B * S, d).T                     # [d, B*S]
     rhs_prev = rhs_prev.unsqueeze(0).expand(n_dag_samples, d, B * S).contiguous()
-    z_prev_flat = torch.linalg.solve(LHS_prev, rhs_prev)             # [N, d, B*S]
+    z_prev_flat = _robust_solve(LHS_prev, rhs_prev)             # [N, d, B*S]
     z_prev = z_prev_flat.transpose(-1, -2).reshape(n_dag_samples, B, S, d)
     z_prev = torch.clamp(z_prev, min=-20.0, max=20.0)
 
@@ -289,7 +290,7 @@ def perturbation_set_loss_u(
     )                                                               # [N, B, d, d]
 
     rhs_post = eps_tilde.transpose(-1, -2).contiguous()             # [N, B, d, S]
-    z_post = torch.linalg.solve(LHS_post, rhs_post).transpose(-1, -2)
+    z_post = _robust_solve(LHS_post, rhs_post).transpose(-1, -2)
     z_post = torch.clamp(z_post, min=-20.0, max=20.0)               # [N, B, S, d]
 
     # Decode all N*B*S cells in one shot.
@@ -346,7 +347,7 @@ def perturbation_set_loss_u(
             canonical_magnitude=canonical_magnitude,
         )                                                          # [B, G]
         Dt_dx_sparse_T = D.T @ dx_sparse.T                          # [d, B]
-        dz_sparse = torch.linalg.solve(DtD, Dt_dx_sparse_T).T       # [B, d]
+        dz_sparse = _robust_solve(DtD, Dt_dx_sparse_T).T       # [B, d]
 
         z_target_sparse = z_prev + dz_sparse[None, :, None, :]      # [N, B, S, d]
         eps_tilde_sparse = (
@@ -354,7 +355,7 @@ def perturbation_set_loss_u(
             + (1.0 - u_bcast) * eps_ctrl_set[None, :, :, :]
         )
         rhs_post_sparse = eps_tilde_sparse.transpose(-1, -2).contiguous()
-        z_post_sparse = torch.linalg.solve(LHS_post, rhs_post_sparse).transpose(-1, -2)
+        z_post_sparse = _robust_solve(LHS_post, rhs_post_sparse).transpose(-1, -2)
         z_post_sparse = torch.clamp(z_post_sparse, min=-20.0, max=20.0)
         x_hat_post_sparse = model.decoder(
             z_post_sparse.reshape(-1, d)
@@ -460,14 +461,14 @@ def perturbation_set_loss_shift(
     # z_prev = (I − A^T)^{-1} ε_ctrl
     rhs_prev = eps_ctrl_set.reshape(B * S, d).T                    # [d, B*S]
     rhs_prev = rhs_prev.unsqueeze(0).expand(N, d, B * S).contiguous()
-    z_prev = torch.linalg.solve(LHS, rhs_prev).transpose(-1, -2).reshape(N, B, S, d)
+    z_prev = _robust_solve(LHS, rhs_prev).transpose(-1, -2).reshape(N, B, S, d)
     z_prev = torch.clamp(z_prev, min=-20.0, max=20.0)
 
     # z_post = (I − A^T)^{-1} (ε_ctrl + S^p)   (shift broadcast over the S cells)
     eps_post_set = eps_ctrl_set + S_shift.unsqueeze(1)             # [B, S, d]
     rhs_post = eps_post_set.reshape(B * S, d).T                    # [d, B*S]
     rhs_post = rhs_post.unsqueeze(0).expand(N, d, B * S).contiguous()
-    z_post = torch.linalg.solve(LHS, rhs_post).transpose(-1, -2).reshape(N, B, S, d)
+    z_post = _robust_solve(LHS, rhs_post).transpose(-1, -2).reshape(N, B, S, d)
     z_post = torch.clamp(z_post, min=-20.0, max=20.0)
 
     # Decode (works for linear and MLP decoders; broadcasts over leading dims).
@@ -612,8 +613,8 @@ def perturbation_set_loss_shift_mutilate(
 
     # z_prev (control) and z_S (shift displacement) under the UNMUTILATED graph
     rhs_prev = eps_ctrl_set.reshape(B * S, d).T.unsqueeze(0).expand(N, d, B * S).contiguous()
-    z_prev = torch.clamp(torch.linalg.solve(LHS_obs, rhs_prev).transpose(-1, -2).reshape(N, B, S, d), -20, 20)
-    z_S = torch.linalg.solve(LHS_obs, S_shift.T.unsqueeze(0).expand(N, d, B).contiguous())
+    z_prev = torch.clamp(_robust_solve(LHS_obs, rhs_prev).transpose(-1, -2).reshape(N, B, S, d), -20, 20)
+    z_S = _robust_solve(LHS_obs, S_shift.T.unsqueeze(0).expand(N, d, B).contiguous())
     z_S = z_S.transpose(-1, -2).reshape(N, B, d)                       # [N, B, d]
     z_target = z_prev + z_S.unsqueeze(2)                               # [N, B, S, d]
 
@@ -626,7 +627,7 @@ def perturbation_set_loss_shift_mutilate(
     LHS_mut = (I_mat.view(1, 1, d, d)
                - A_T.view(N, 1, d, d) * one_minus_u.view(1, B, d, 1))  # [N, B, d, d]
     rhs_mut = eps_tilde.transpose(-1, -2)                              # [N, B, d, S]
-    z_post = torch.linalg.solve(LHS_mut, rhs_mut).transpose(-1, -2)    # [N, B, S, d]
+    z_post = _robust_solve(LHS_mut, rhs_mut).transpose(-1, -2)    # [N, B, S, d]
     z_post = torch.clamp(z_post, -20, 20)
 
     x_hat_post = model.decoder(z_post.reshape(-1, d)).reshape(N, B, S, G)
