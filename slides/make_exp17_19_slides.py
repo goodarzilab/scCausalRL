@@ -144,19 +144,19 @@ if st:
         d=m[mm]; rows.append([mm,d.get(tk,'-'),d.get('n_conf_gt_0.05','-'),
                               f"{d['median_spec']:.3f}",f"{d.get('agree_top_with_cosine',1.0):.2f}"])
     table(s,7.15,1.55,5.65,rows,[1.5,1.25,1.25,1.0,1.0],fs=11,hfs=11)
-    cs=st['cosine_specificity']
-    bullets(s,7.15,3.7,5.7,2.2,[
-        f"TFs scored (n≥50 cells): {st['n_TFs']}   |   cell types: {st['n_celltypes']}",
-        f"shared genes used: {st['shared_genes']}  (discriminative half: {st['discriminative_genes']})",
+    cs=st['cosine_specificity']; fdr=st.get('fdr',{})
+    bullets(s,7.15,3.6,5.7,2.4,[
+        f"TFs scored (n≥50): {st['n_TFs']}  |  cell types: {st['n_celltypes']}  |  shared genes: {st['shared_genes']}",
         f"cosine specificity: median {cs['median']:.3f}, q90 {cs['q90']:.3f}, max {cs['max']:.3f}",
-        f"confidently annotated (spec>{conf}): {m['cosine'][tk]} TFs  —  vs only 13 with the mouse MOCA reference.",
-        f"cond(DᵀD)={st['cond_DtD']:.1e} → collinear signatures, so unconstrained OLS/NNLS are ill-conditioned; cosine is the stable choice (README finding, re-confirmed).",
+        f"FDR-controlled (gene-permutation null, {fdr.get('pool_null_size',0):,} draws + BH): q<0.05 → {fdr.get('n_fdr_0.05','?')} TFs, q<0.10 → {fdr.get('n_fdr_0.10','?')} TFs.",
+        f"Heuristic spec>{conf} flags {m['cosine'][tk]} (vs 13 with mouse) — but only {fdr.get('n_fdr_0.05','?')}/{fdr.get('n_fdr_0.10','?')} survive FDR: 172 collinear types ⇒ heavy null tail.",
+        f"cond(DᵀD)={st['cond_DtD']:.0e} ⇒ NNLS/OLS/ridge degenerate (0 calls); cosine is the stable method.",
     ],size=11)
 else:
     text(s,7.15,1.6,5.7,3,'[annotation job results pending —\nslide auto-fills from human_annotation_stats.json]',size=14,color=GRAY)
 box(s,0.3,6.25,12.7,0.95,fill=RGBColor(0xEC,0xF7,0xEC),line=GREEN)
-text(s,0.55,6.4,12.3,0.6,'Chosen: cosine alignment + specificity gate. The human reference is the same family the Joung paper used; '
-     'the upgrade vs mouse is gene retention (no orthology loss) → more confident calls.',size=13,color=DARK)
+text(s,0.55,6.4,12.3,0.6,'Chosen: cosine + permutation-FDR gate. Human ref (no orthology loss) gives far more candidate calls than mouse, '
+     'but proper FDR shows the labels are still sparse → use the q<0.10 / top-decile set as the confident pool, with care.',size=12.5,color=DARK)
 
 # ════════════════════════ SLIDE 3 — Human atlas figure ════════════════════════
 s=slide_blank(); title_bar(s,'1 · The Human Fetal Reference (Cao 2020 / Descartes, GSE156793)')
