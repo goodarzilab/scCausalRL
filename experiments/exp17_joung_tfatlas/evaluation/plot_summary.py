@@ -67,14 +67,18 @@ def panel(ax, title, ylabel, model_a, model_b, lab_a, lab_b, base_vals,
 def fig_singles(S, B):
     bs = B.get('singles', {})
     bnames = ['context_mean', 'perturb_mean', 'corr', 'coexpression']
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    fig, axes = plt.subplots(2, 4, figsize=(18.5, 9))
     specs = [
-        ('pearson_delta',            'Pearson Δ (raw)',           dict()),
-        ('effect_spearman',          'Effect-size Spearman',      dict()),
-        ('deg_auroc',                'DEG-detection AUROC',       dict(chance=0.5, ylim=(0.4, 1.0))),
-        ('pearson_delta_resid',      'Pearson Δ (drift-removed)', dict(zero=True)),
-        ('discrimination_cos_resid', 'Discrimination (resid)',    dict(chance=0.5)),
-        ('fate_top1',                'Fate top-1 (20-way)',       dict(chance=0.05)),
+        # TOP ROW — raw metrics (saturated by the drift baselines)
+        ('pearson_delta',            'Pearson Δ (raw)',             dict()),
+        ('effect_spearman',          'Effect-size Spearman (raw)',  dict()),
+        ('deg_auroc',                'DEG-AUROC (raw)',             dict(chance=0.5, ylim=(0.4, 1.0))),
+        ('discrimination_cos',       'Discrimination (raw)',        dict(chance=0.5)),
+        # BOTTOM ROW — drift-removed (same metric, residual = Δ − drift)
+        ('pearson_delta_resid',      'Pearson Δ (drift-removed)',       dict(zero=True)),
+        ('effect_spearman_resid',    'Effect-size Spearman (drift-rm)', dict(zero=True)),
+        ('deg_auroc_resid',          'DEG-AUROC (drift-removed)',       dict(chance=0.5)),
+        ('discrimination_cos_resid', 'Discrimination (drift-removed)',  dict(chance=0.5)),
     ]
     for ax, (key, ylab, kw) in zip(axes.ravel(), specs):
         ma = [g(S.get(m, {}), key) for m in MODELS]
@@ -83,8 +87,8 @@ def fig_singles(S, B):
         panel(ax, ylab, ylab, ma, mb, 'mutilate', 'additive', bv, **kw)
     axes[0, 0].legend(fontsize=8, loc='upper right')
     fig.suptitle('exp17 Joung — held-out TF zero-shot (epoch 60): models (mutilate vs additive) + non-learned baselines (bars)\n'
-                 '* = residual-target run (collapsed). Raw pearson/Spearman/AUROC are saturated by perturb_mean (drift); '
-                 'the model only wins on drift-removed + discrimination.', fontsize=11)
+                 'TOP = raw metrics (saturated by perturb_mean / coexp drift) · BOTTOM = same metrics drift-removed (Δ − drift), '
+                 'where the model must win. * = residual-target run (collapsed).', fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     p = f"{FIG}/exp17_singles_panels.png"; fig.savefig(p, dpi=130); plt.close(fig); return p
 
