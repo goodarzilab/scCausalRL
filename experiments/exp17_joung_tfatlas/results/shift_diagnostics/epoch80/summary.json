@@ -1,0 +1,37 @@
+{
+  "tag": "epoch80",
+  "epoch": 80,
+  "n_test": 169,
+  "n_train_sample": 400,
+  "chance_top1_matchedN": 0.005917159763313609,
+  "D1_model": {
+    "train_top1": 0.011834319526627219,
+    "train_disc": 0.5141236968160044,
+    "test_top1": 0.005917159763313609,
+    "test_disc": 0.5075021132713441
+  },
+  "D2_shift_var": {
+    "train": {
+      "total_var": 0.7812231779098511,
+      "mean_norm": 2.3174469470977783,
+      "norm_std": 0.4189273416996002,
+      "mean_dist_to_centroid": 0.7287257313728333,
+      "mean_pairwise_cos": 0.8505335450172424
+    },
+    "test": {
+      "total_var": 2.282474994659424,
+      "mean_norm": 2.5450971126556396,
+      "norm_std": 1.001493215560913,
+      "mean_dist_to_centroid": 1.0454415082931519,
+      "mean_pairwise_cos": 0.7917219996452332
+    },
+    "var_ratio_test_over_train": 2.921668296944898
+  },
+  "D3_ridge_fingerprint": {
+    "fingerprint_dim": 50,
+    "train_top1": 0.13609467455621302,
+    "train_disc": 0.5755142293603832,
+    "test_top1": 0.005917159763313609,
+    "test_disc": 0.502359819667512
+  }
+}

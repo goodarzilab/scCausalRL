@@ -104,3 +104,11 @@ Thumbs.db
 !requirements.txt
 # executed analysis notebooks (heavy embedded outputs)
 experiments/notebooks/dag_analysis_*_executed.ipynb
+
+# Large data / reference binaries (never tracked in experiment folders)
+*.h5ad
+*.fasta
+*.fa
+*.RDS
+*.rds
+*.rpt
