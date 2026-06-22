@@ -1,0 +1,37 @@
+{
+  "n_TFs": 1084,
+  "n_celltypes": 172,
+  "shared_genes": 6557,
+  "discriminative_genes": 3278,
+  "cond_DtD": 1.0547098774185918e+17,
+  "methods": {
+    "cosine": {
+      "n_conf_gt_0.12": 73,
+      "n_conf_gt_0.05": 949,
+      "median_spec": 0.06734001836714314
+    },
+    "nnls": {
+      "n_conf_gt_0.12": 0,
+      "n_conf_gt_0.05": 0,
+      "median_spec": 0.02027455156169861,
+      "agree_top_with_cosine": 0.023062730627306273
+    },
+    "ols": {
+      "n_conf_gt_0.12": 0,
+      "n_conf_gt_0.05": 0,
+      "median_spec": 4.170927031724991e-05,
+      "agree_top_with_cosine": 0.01937269372693727
+    },
+    "ridge": {
+      "n_conf_gt_0.12": 0,
+      "n_conf_gt_0.05": 0,
+      "median_spec": 4.170924987927061e-05,
+      "agree_top_with_cosine": 0.01937269372693727
+    }
+  },
+  "cosine_specificity": {
+    "median": 0.06734001836714314,
+    "q90": 0.10889196490375398,
+    "max": 0.39414219655641997
+  }
+}
