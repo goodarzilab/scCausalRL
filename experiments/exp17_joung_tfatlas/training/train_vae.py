@@ -311,6 +311,10 @@ def train_vae(config, data_dict=None, device=None):
         shift_n_layers=int(m.get('shift_n_layers', 1)),
         shift_output_activation=m.get('shift_output_activation', 'none'),
         shift_scale_init=float(m.get('shift_scale_init', 1.0)),
+        separate_pert_decoder=bool(m.get('separate_pert_decoder', False)),
+        pert_decoder_type=m.get('pert_decoder_type', 'linear'),
+        pert_decoder_hidden=int(m.get('pert_decoder_hidden', 1024)),
+        pert_decoder_layers=int(m.get('pert_decoder_layers', 2)),
     ).to(device)
 
     print(f"Model: CausalVAE(n_genes={n_genes}, latent_dim={m['latent_dim']}, "

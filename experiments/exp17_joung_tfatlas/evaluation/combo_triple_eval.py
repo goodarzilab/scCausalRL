@@ -73,7 +73,8 @@ def main():
         A = model.dag.sample_A(n_samples=1).squeeze(0)
         LHS = torch.eye(d, device=dev, dtype=A.dtype) - A.T
         z_prev = torch.clamp(_solve(LHS, eps_ctrl), -20, 20)
-        ctrl_recon = model.decoder(z_prev).mean(0).cpu().numpy()
+        pert_dec = getattr(model, "pert_decoder", None) or model.decoder  # sep-head aware (no-op otherwise)
+        ctrl_recon = pert_dec(z_prev).mean(0).cpu().numpy()
 
     def single_shift(gi):
         return model.compute_shift(torch.tensor([gi], device=dev)).sum(0)
@@ -86,13 +87,13 @@ def main():
             model.get_loadings()[torch.tensor(gis, device=dev)].sum(0).clamp(0, U_MAX)
         eps_tilde = u.unsqueeze(0) * z_target + (1 - u).unsqueeze(0) * eps_ctrl
         z_post, _, _ = model.dag.scm_intervene_u(eps_ctrl, A, eps_tilde, u)
-        return model.decoder(z_post).mean(0).cpu().numpy() - ctrl_recon
+        return pert_dec(z_post).mean(0).cpu().numpy() - ctrl_recon
 
     def additive(gis):                    # Σ single-TF predicted Δ (no epistasis)
         tot = np.zeros(G, np.float32)
         for g in gis:
             z_S = torch.clamp(_solve(LHS, single_shift(g).unsqueeze(0)), -20, 20)
-            tot += (model.decoder(z_prev + z_S).mean(0).cpu().numpy() - ctrl_recon)
+            tot += (pert_dec(z_prev + z_S).mean(0).cpu().numpy() - ctrl_recon)
         return tot
 
     # observed combo Δ — lognorm exactly as load_joung does for the singles (same frame)

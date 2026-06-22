@@ -65,6 +65,10 @@ def load_shift_model(checkpoint_path, device):
         shift_hidden=int(cfg_m.get('shift_hidden', 1024)),
         shift_n_layers=int(cfg_m.get('shift_n_layers', 1)),
         shift_output_activation=cfg_m.get('shift_output_activation', 'none'),
+        separate_pert_decoder=bool(cfg_m.get('separate_pert_decoder', False)),
+        pert_decoder_type=cfg_m.get('pert_decoder_type', 'linear'),
+        pert_decoder_hidden=int(cfg_m.get('pert_decoder_hidden', 1024)),
+        pert_decoder_layers=int(cfg_m.get('pert_decoder_layers', 2)),
     ).to(device)
     model.load_state_dict(sd)
     model.eval()

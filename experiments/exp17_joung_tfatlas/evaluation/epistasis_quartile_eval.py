@@ -122,14 +122,26 @@ def main():
             z_post, _, _ = model.dag.scm_intervene_u(eps_ctrl, A, eps_tilde, u)
             return model.decoder(z_post).mean(0).cpu().numpy() - ctrl_recon
 
-        # per-set do-op metrics
+        def model_add(gis):
+            """model's OWN additive: Σ over set TFs of the model's single-TF predicted Δ (no
+            mutilation interaction). If do-op stays flat while THIS degrades with epistasis,
+            the mutilation operator is capturing non-additive structure (clean epistasis test)."""
+            tot = np.zeros(G, np.float32)
+            for g in gis:
+                S = model.compute_shift(torch.tensor([g], device=dev)).sum(0)
+                z_S = torch.clamp(_solve(LHS, S.unsqueeze(0)), -20, 20)
+                tot += (model.decoder(z_prev + z_S).mean(0).cpu().numpy() - ctrl_recon)
+            return tot
+
+        # per-set: do-op (mutilation) vs additive_obs (oracle) vs model_add (model's own Σ singles)
         for s in sets:
-            do = do_op(s['gis'])
-            do_p, do_a = per_set_metrics(do, s['obs'])
+            do_p, do_a = per_set_metrics(do_op(s['gis']), s['obs'])
+            ma_p, _ = per_set_metrics(model_add(s['gis']), s['obs'])
             ao_p, ao_a = per_set_metrics(s['add_obs'], s['obs'])
             per_rows.append({'model': tag, 'set': s['set'], 'k': s['k'], 'quartile': s['quartile'],
-                             'E': s['E'], 'do_pearson': do_p, 'addobs_pearson': ao_p,
-                             'do_deg_auroc': do_a, 'addobs_deg_auroc': ao_a, 'gap': do_p - ao_p})
+                             'E': s['E'], 'do_pearson': do_p, 'modeladd_pearson': ma_p,
+                             'addobs_pearson': ao_p, 'do_deg_auroc': do_a, 'addobs_deg_auroc': ao_a,
+                             'gap': do_p - ao_p, 'gap_vs_modeladd': do_p - ma_p})
         # aggregate by quartile
         mres = {}
         dfm = pd.DataFrame([r for r in per_rows if r['model'] == tag])
@@ -139,8 +151,10 @@ def main():
             mres[f'Q{Q}'] = {
                 'n': int(len(sub)), 'mean_E': float(sub['E'].mean()),
                 'do_pearson': float(sub['do_pearson'].mean()),
+                'modeladd_pearson': float(sub['modeladd_pearson'].mean()),
                 'addobs_pearson': float(sub['addobs_pearson'].mean()),
                 'gap': float(sub['gap'].mean()),
+                'gap_vs_modeladd': float(sub['gap_vs_modeladd'].mean()),
                 'do_deg_auroc': float(sub['do_deg_auroc'].mean()),
                 'addobs_deg_auroc': float(sub['addobs_deg_auroc'].mean()),
                 'do_wins_frac': float((sub['gap'] > 0).mean()),

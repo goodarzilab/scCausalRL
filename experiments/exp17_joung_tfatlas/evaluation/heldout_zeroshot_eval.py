@@ -161,7 +161,8 @@ def main():
         A = model.dag.sample_A(n_samples=1).squeeze(0)
         LHS = torch.eye(d, device=dev, dtype=A.dtype) - A.T
         z_prev = torch.clamp(_solve(LHS, eps_ctrl), -20, 20)
-        ctrl_recon = model.decoder(z_prev).mean(0).cpu().numpy()
+        pert_dec = getattr(model, "pert_decoder", None) or model.decoder  # sep-head aware (no-op otherwise)
+        ctrl_recon = pert_dec(z_prev).mean(0).cpu().numpy()
 
     # Two zero-shot predictors per held-out TF (both decode to Δ vs ctrl_recon):
     #   pred      = shift-native MUTILATION (headline): solve Σshift, mutilate ε with set-dep u
@@ -175,12 +176,12 @@ def main():
             S = model.compute_shift(torch.tensor([gi], device=dev)).sum(0)
             z_S = torch.clamp(_solve(LHS, S.unsqueeze(0)), -20, 20)
             z_target = z_prev + z_S
-            pred_add[k] = model.decoder(z_target).mean(0).cpu().numpy() - ctrl_recon
+            pred_add[k] = pert_dec(z_target).mean(0).cpu().numpy() - ctrl_recon
             u = (BETA * S.abs()).clamp(max=1.0) if U_MODE == 'shift' else \
                 model.get_loadings()[torch.tensor([gi], device=dev)].sum(0).clamp(0, U_MAX)
             eps_tilde = u.unsqueeze(0) * z_target + (1 - u).unsqueeze(0) * eps_ctrl
             z_post, _, _ = model.dag.scm_intervene_u(eps_ctrl, A, eps_tilde, u)
-            pred[k] = model.decoder(z_post).mean(0).cpu().numpy() - ctrl_recon
+            pred[k] = pert_dec(z_post).mean(0).cpu().numpy() - ctrl_recon
         if k % 50 == 0: print(f"  {k}/{len(test)}", flush=True)
     train_obs = np.stack([np.asarray(de[g], np.float32) for g in train])
 

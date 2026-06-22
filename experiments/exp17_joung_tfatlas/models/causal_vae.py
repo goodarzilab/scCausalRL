@@ -25,7 +25,9 @@ class CausalVAE(nn.Module):
                  decoder_type='linear', decoder_hidden=1024, decoder_layers=2,
                  use_shift_encoder=False, shift_label_dim=50, shift_hidden=1024,
                  shift_n_layers=1, shift_output_activation='none',
-                 shift_scale_init=1.0):
+                 shift_scale_init=1.0,
+                 separate_pert_decoder=False, pert_decoder_type='linear',
+                 pert_decoder_hidden=1024, pert_decoder_layers=2):
         super().__init__()
         self.n_genes = n_genes
         self.latent_dim = latent_dim
@@ -48,6 +50,21 @@ class CausalVAE(nn.Module):
                                       hidden=decoder_hidden, n_layers=decoder_layers)
         else:
             self.decoder = LinearDecoder(latent_dim=latent_dim, output_dim=n_genes)
+
+        # Optional SEPARATE perturbation decoder head. When set, the perturbation/residual
+        # Δ prediction decodes z_post/z_prev through THIS head instead of the main decoder, so
+        # the main linear `decoder` (which defines the GRN + carries the CollecTRI prior) is
+        # not forced to also fit drift-removed residuals. It taps z_post (post-SCM), so A and
+        # the encoder still receive interventional gradients — only `decoder` is decoupled.
+        self.separate_pert_decoder = bool(separate_pert_decoder)
+        if self.separate_pert_decoder:
+            if pert_decoder_type == 'mlp':
+                self.pert_decoder = MLPDecoder(latent_dim=latent_dim, output_dim=n_genes,
+                                               hidden=pert_decoder_hidden, n_layers=pert_decoder_layers)
+            else:
+                self.pert_decoder = LinearDecoder(latent_dim=latent_dim, output_dim=n_genes)
+        else:
+            self.pert_decoder = None
 
         # ── Learned perturbation shift encoder (SCCVAE-style) ──────────────────
         # Replaces the leaky `dz = D⁺·dx` projection. `pert_label` is a per-gene

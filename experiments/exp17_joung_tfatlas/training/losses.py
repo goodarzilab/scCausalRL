@@ -630,8 +630,11 @@ def perturbation_set_loss_shift_mutilate(
     z_post = _robust_solve(LHS_mut, rhs_mut).transpose(-1, -2)    # [N, B, S, d]
     z_post = torch.clamp(z_post, -20, 20)
 
-    x_hat_post = model.decoder(z_post.reshape(-1, d)).reshape(N, B, S, G)
-    x_hat_prev = model.decoder(z_prev.reshape(-1, d)).reshape(N, B, S, G)
+    # decode through the SEPARATE perturbation head if present (decouples the GRN decoder
+    # from the residual target); it taps z_post so A still gets interventional gradients.
+    pert_dec = getattr(model, 'pert_decoder', None) or model.decoder
+    x_hat_post = pert_dec(z_post.reshape(-1, d)).reshape(N, B, S, G)
+    x_hat_prev = pert_dec(z_prev.reshape(-1, d)).reshape(N, B, S, G)
 
     delta_pred = (x_hat_post - x_hat_prev).mean(dim=2)                 # [N, B, G]
     mse_term = (delta_pred - dx_all[None, :, :]).pow(2).mean()
