@@ -139,11 +139,13 @@ label(s,7.15,1.1,5.7,'Method shoot-out (chosen: cosine)',color=GREEN)
 if st:
     m=st['methods']; thr_key=[k for k in m['cosine'] if k.startswith('n_conf_gt_') and '0.05' not in k]
     tk=thr_key[0] if thr_key else 'n_conf_gt_0.05'; conf=tk.split('_')[-1]
-    rows=[['method',f'#conf(>{conf})','#conf(>0.05)','med spec','agree↔cos']]
+    fdr=st.get('fdr',{}); fdr_counts={'cosine':(fdr.get('n_fdr_0.05','?'),fdr.get('n_fdr_0.10','?'))}
+    rows=[['method','#(q<0.05)','#(q<0.10)','med spec','agree↔cos']]
     for mm in ['cosine','nnls','ols','ridge']:
-        d=m[mm]; rows.append([mm,d.get(tk,'-'),d.get('n_conf_gt_0.05','-'),
-                              f"{d['median_spec']:.3f}",f"{d.get('agree_top_with_cosine',1.0):.2f}"])
+        d=m[mm]; q05,q10=fdr_counts.get(mm,('0†','0†'))   # FDR run on cosine; others degenerate (null floor)
+        rows.append([mm,q05,q10,f"{d['median_spec']:.3f}",f"{d.get('agree_top_with_cosine',1.0):.2f}"])
     table(s,7.15,1.55,5.65,rows,[1.5,1.25,1.25,1.0,1.0],fs=11,hfs=11)
+    text(s,7.15,3.12,5.65,0.3,'† FDR run on cosine (chosen); nnls/ols/ridge at null floor → 0 at any FDR',size=8,italic=True,color=GRAY)
     cs=st['cosine_specificity']; fdr=st.get('fdr',{})
     bullets(s,7.15,3.6,5.7,2.4,[
         f"TFs scored (n≥50): {st['n_TFs']}  |  cell types: {st['n_celltypes']}  |  shared genes: {st['shared_genes']}",
