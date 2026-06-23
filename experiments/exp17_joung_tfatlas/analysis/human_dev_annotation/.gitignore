@@ -3,3 +3,6 @@ joung_human_cosine.csv
 joung_human_nnls.csv
 joung_human_ols.csv
 joung_human_ridge.csv
+cao_celltypist_model.pkl
+celltypist_LR_discriminative_annotation.csv
+celltypist_mean_deviation_annotation.csv

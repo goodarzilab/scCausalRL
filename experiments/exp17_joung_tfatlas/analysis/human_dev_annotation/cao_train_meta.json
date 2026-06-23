@@ -1,0 +1,8 @@
+{
+  "n_train_cells": 37487,
+  "n_types": 165,
+  "n_genes": 6557,
+  "cid_key": "sample",
+  "gene_key": "gene_short_name",
+  "label": "Organ_cell_lineage"
+}
