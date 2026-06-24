@@ -1,0 +1,3 @@
+Loaded shift model (epoch 21, decoder=linear, 6642 genes)
+[predict] genes=6642 latent=64 mutilation=True modality=True (k562 mod=0)
+[predict] STATE HVG in model panel: 2000/2000

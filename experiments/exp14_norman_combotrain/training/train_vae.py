@@ -654,6 +654,7 @@ def train_vae(config, data_dict=None, device=None):
                 A=A,
                 model=model,
                 beta=beta,
+                lambda_eps_decorr=p1.get('lambda_eps_decorr', 0.0),
                 lambda_pert=p1['lambda_pert'] * dag_ramp,
                 lambda_dag=dag_ramp,
                 lambda_sparse=p1['lambda_sparse'] * dag_ramp,

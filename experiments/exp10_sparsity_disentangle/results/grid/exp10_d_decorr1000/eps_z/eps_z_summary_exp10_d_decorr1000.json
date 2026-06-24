@@ -1,0 +1,14 @@
+{
+  "tag": "exp10_d_decorr1000",
+  "checkpoint": "results/grid/exp10_d_decorr1000/checkpoints/phase1_epoch150.pt",
+  "epoch": 150,
+  "n_each": 1370,
+  "latent_dim": 64,
+  "z_vs_eps_rel_l2": 0.35565823316574097,
+  "z_vs_eps_w1": 0.020198206131241212,
+  "z_vs_eps_diag_corr": 0.7415581568753846,
+  "eps_mean_mu2": 0.039487965404987335,
+  "eps_mean_var": 1.9842499494552612,
+  "eps_mean_kl_per_dim": 0.43123453855514526,
+  "eps_active_units": 64
+}

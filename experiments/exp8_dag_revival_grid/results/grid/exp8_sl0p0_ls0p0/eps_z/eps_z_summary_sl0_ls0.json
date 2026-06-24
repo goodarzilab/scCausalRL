@@ -1,0 +1,14 @@
+{
+  "tag": "sl0_ls0",
+  "checkpoint": "/home/sgoudarzi/scCausalRL/experiments/exp8_dag_revival_grid/results/grid/exp8_sl0p0_ls0p0/checkpoints/phase1_epoch150.pt",
+  "epoch": 150,
+  "n_each": 1370,
+  "latent_dim": 64,
+  "z_vs_eps_rel_l2": 1.0833921432495117,
+  "z_vs_eps_w1": 0.09677966123944985,
+  "z_vs_eps_diag_corr": 0.8970322858773576,
+  "eps_mean_mu2": 0.09579085558652878,
+  "eps_mean_var": 1.7706472873687744,
+  "eps_mean_kl_per_dim": 0.406193345785141,
+  "eps_active_units": 64
+}

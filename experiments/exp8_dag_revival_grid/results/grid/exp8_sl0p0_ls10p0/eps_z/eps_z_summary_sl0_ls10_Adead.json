@@ -1,0 +1,14 @@
+{
+  "tag": "sl0_ls10_Adead",
+  "checkpoint": "/home/sgoudarzi/scCausalRL/experiments/exp8_dag_revival_grid/results/grid/exp8_sl0p0_ls10p0/checkpoints/phase1_epoch150.pt",
+  "epoch": 150,
+  "n_each": 1370,
+  "latent_dim": 64,
+  "z_vs_eps_rel_l2": 1.7305719666182995e-05,
+  "z_vs_eps_w1": 2.837804699205463e-06,
+  "z_vs_eps_diag_corr": 0.999999998928701,
+  "eps_mean_mu2": 0.09659038484096527,
+  "eps_mean_var": 1.7536261081695557,
+  "eps_mean_kl_per_dim": 0.3901098668575287,
+  "eps_active_units": 64
+}

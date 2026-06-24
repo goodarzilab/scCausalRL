@@ -1,0 +1,14 @@
+{
+  "tag": "exp10_d_beta2",
+  "checkpoint": "results/grid/exp10_d_beta2/checkpoints/phase1_epoch150.pt",
+  "epoch": 150,
+  "n_each": 1370,
+  "latent_dim": 64,
+  "z_vs_eps_rel_l2": 0.5225621461868286,
+  "z_vs_eps_w1": 0.023698025749683733,
+  "z_vs_eps_diag_corr": 0.8833837562716765,
+  "eps_mean_mu2": 0.031808920204639435,
+  "eps_mean_var": 1.4629281759262085,
+  "eps_mean_kl_per_dim": 0.09716103225946426,
+  "eps_active_units": 64
+}

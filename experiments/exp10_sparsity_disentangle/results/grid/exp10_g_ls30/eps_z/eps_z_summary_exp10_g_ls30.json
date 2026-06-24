@@ -1,0 +1,14 @@
+{
+  "tag": "exp10_g_ls30",
+  "checkpoint": "results/grid/exp10_g_ls30/checkpoints/phase1_epoch150.pt",
+  "epoch": 150,
+  "n_each": 1370,
+  "latent_dim": 64,
+  "z_vs_eps_rel_l2": 0.01476472057402134,
+  "z_vs_eps_w1": 0.0005006372559623444,
+  "z_vs_eps_diag_corr": 0.9999986705875612,
+  "eps_mean_mu2": 0.07330425083637238,
+  "eps_mean_var": 0.38600587844848633,
+  "eps_mean_kl_per_dim": 0.4245491623878479,
+  "eps_active_units": 64
+}

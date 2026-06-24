@@ -848,9 +848,24 @@ def biological_prior_loss(model, gene_names, collectri_net=None, margin=0.1):
     return loss_prior
 
 
+def eps_decorrelation_loss(mu):
+    """Total-correlation proxy: mean squared off-diagonal of the batch covariance of the
+    posterior means μ (the informative exogenous part). The diagonal KL can't see
+    cross-dimension correlation; this pushes the exogenous factors toward independence
+    without collapsing them. mu: [B, d] → scalar. (Ported from exp10.)"""
+    B, d = mu.shape
+    if B < 2:
+        return mu.new_tensor(0.0)
+    muc = mu - mu.mean(dim=0, keepdim=True)
+    cov = (muc.T @ muc) / (B - 1)
+    off = cov - torch.diag(torch.diagonal(cov))
+    return (off ** 2).sum() / (d * (d - 1))
+
+
 def compute_total_loss(
     x, x_hat, mu, log_var, A, model,
     beta=1.0,
+    lambda_eps_decorr=0.0,
     lambda_pert=10.0,
     lambda_dag=0.0,
     lambda_sparse=0.01,
@@ -886,6 +901,14 @@ def compute_total_loss(
     l_ortho = orthogonality_loss(model.decoder)
     losses['ortho'] = l_ortho
     total = total + lambda_ortho * l_ortho
+
+    # ε-decorrelation (off-diagonal cov(μ)²) — disentangle the exogenous latents
+    if lambda_eps_decorr > 0:
+        l_eps_decorr = eps_decorrelation_loss(mu)
+        losses['eps_decorr'] = l_eps_decorr
+        total = total + lambda_eps_decorr * l_eps_decorr
+    else:
+        losses['eps_decorr'] = torch.tensor(0.0)
 
     if dag_active:
         # DAGMA constraint
