@@ -42,7 +42,14 @@ A_gap>0 ⇒ real A **improves** prediction. probe_Agap>0 ⇒ A **changes** the o
 
 ## 4. GRN biological-ness (projected G=D·A·Dᵀ vs priors, AUROC)
 
-shuffA≈collectri ⇒ the "biological" signal is decoder-coexpression (D·Dᵀ), not the causal A.
+**⚠️ CAVEAT — the CollecTRI prior was ON during exp20 training (`lambda_prior:10`, carried over
+from the forked exp19 configs; NOT off as the plan intended).** The prior loss activated at
+epoch 11, spiked to 0.275, and was driven to ~0.008 — i.e. G was actively fit to the CollecTRI
+margin. So `collectri_auroc` 0.97–0.98 is **prior memorization, not prior-free discovery**, and
+this table is NOT a fair biological-recovery test. shuffA≈collectri (0.95≈0.97) shows the
+memorization lives in the DECODER (D·Dᵀ), robust to A-shuffle; randomD→chance confirms D carries
+it. `dorothea_held` (edges the prior never saw) 0.73–0.80 is the only partial generalization
+signal. **A prior-OFF re-run is required for the honest biological-ness question.**
 
 | arm | collectri | shuffA | dorothea_held | corrGRN(base) | randomD(chance) |
 |---|---|---|---|---|---|
@@ -76,9 +83,10 @@ shuffA≈collectri ⇒ the "biological" signal is decoder-coexpression (D·Dᵀ)
      **collapsed to chance** (`sparse_resid` 0.504, `sparse_all` 0.502, both pearson_resid < 0).
    - Component ablation: A→0 barely moves spearman (±0.01–0.04); **shift→0 dominates** (−0.08…−0.25).
 
-3. **The "biological" GRN is a decoder-coexpression artifact:** CollecTRI AUROC 0.97–0.98,
-   but *shuffling A* only drops it to 0.95–0.96 (randomD → chance 0.48–0.53). G=D·A·Dᵀ looks
-   biological because of D·Dᵀ, independent of the causal A.
+3. **The "biological" GRN is NOT a clean signal — the prior was accidentally ON.** CollecTRI
+   AUROC 0.97–0.98 is prior memorization (`lambda_prior:10` carried over from exp19 configs),
+   and it lives in the decoder (shuffling A only drops it to 0.95–0.96; randomD → chance). This
+   arm-set cannot answer the prior-free biological-ness question; a prior-OFF re-run is needed.
 
 **Fragility notes:** (a) L0=0.03 without contrastive over-sparsifies — `sparse_esm` gate
 collapsed to 1.6% open; contrastive protects it (`con` 74.9% open). (b) drift-removed pert
