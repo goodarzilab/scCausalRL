@@ -24,14 +24,21 @@ from sklearn.metrics import roc_auc_score
 from scipy.stats import spearmanr
 
 
-def gen(d=16, G=200, n_tf=120, k=24, n_ctrl=2000, cells_per_tf=80, nonlinear=False, seed=0):
+def gen(d=16, G=200, n_tf=120, k=24, n_ctrl=2000, cells_per_tf=80, nonlinear=False, seed=0, graph='acyclic'):
     rng = np.random.default_rng(seed); g = torch.Generator().manual_seed(seed)
-    # planted DAG A*: strictly upper-triangular (acyclic), sparse, spectrally < 0.85
+    # planted A*. 'acyclic' = strictly upper-triangular DAG (nilpotent). 'cyclic' = general sparse matrix
+    # (feedback loops allowed) — this MATCHES the model's actual class: spectral penalty only, NO
+    # acyclicity (dagma_lambda=0), so any A with spectral radius <1 is representable. Both clamped <0.8.
     A = torch.zeros(d, d)
-    for i in range(d):
-        for j in range(i + 1, d):
-            if rng.random() < 0.25:
-                A[i, j] = torch.randn(1, generator=g).item() * 0.6
+    if graph == 'acyclic':
+        for i in range(d):
+            for j in range(i + 1, d):
+                if rng.random() < 0.25:
+                    A[i, j] = torch.randn(1, generator=g).item() * 0.6
+    else:  # cyclic: dense-ish random off-diagonal, sparsified to ~25%
+        A = torch.randn(d, d, generator=g) * 0.6
+        A = A * (torch.rand(d, d, generator=g) < 0.25).float()
+        A.fill_diagonal_(0.0)                                                   # no self-loops
     sn = torch.linalg.matrix_norm(A, ord=2).item()
     if sn > 0.8:
         A *= 0.8 / sn
@@ -97,12 +104,13 @@ def main():
     ap.add_argument('--decoder', default='learn', choices=['learn', 'frozen'])
     ap.add_argument('--epochs', type=int, default=400); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--l0', type=float, default=0.02)   # target-gate L0 weight (sweep to force sparsity)
+    ap.add_argument('--graph', default='acyclic', choices=['acyclic','cyclic'])
     a = ap.parse_args()
     torch.manual_seed(a.seed); nonlin = a.scm == 'nonlinear'
-    syn = gen(nonlinear=nonlin, seed=a.seed)
+    syn = gen(nonlinear=nonlin, seed=a.seed, graph=a.graph)
     d, G, k = syn['d'], syn['G'], syn['k']
-    print(f"=== SYNTHETIC POC | scm={a.scm} decoder={a.decoder} | d={d} G={G} k={k} "
-          f"train/test TF={len(syn['train'])}/{len(syn['test'])} ===", flush=True)
+    import numpy as _np
+    _ev = _np.abs(_np.linalg.eigvals(syn['A'].numpy())); print(f"=== SYNTHETIC POC | scm={a.scm} dec={a.decoder} graph={a.graph} | A* spectral_radius={_ev.max():.3f} cyclic_edges_lowertri={int((syn['A'].tril(-1).abs()>1e-6).sum())} | d={d} G={G} train/test TF={len(syn['train'])}/{len(syn['test'])} ===", flush=True)
 
     model = CausalVAE(n_genes=G, latent_dim=d, use_shift_encoder=True, shift_label_dim=k,
                       shift_hidden=128, shift_n_layers=1, decoder_type='linear',
