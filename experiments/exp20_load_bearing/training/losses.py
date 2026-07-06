@@ -619,10 +619,20 @@ def perturbation_set_loss_shift_mutilate(
     A_batch = model.dag.sample_A(n_samples=N)                          # [N, d, d]
     I_mat = torch.eye(d, device=device, dtype=A_batch.dtype)
     LHS_obs = I_mat.unsqueeze(0) - A_batch.transpose(-1, -2)           # [N, d, d]
+    nonlin = getattr(model.dag, 'scm_nonlinear', False)
+    n_pic = getattr(model.dag, 'n_picard', 40)
 
     # z_prev (control) under the UNMUTILATED graph — the Δ baseline (x_hat_prev below)
-    rhs_prev = eps_ctrl_set.reshape(B * S, d).T.unsqueeze(0).expand(N, d, B * S).contiguous()
-    z_prev = torch.clamp(_robust_solve(LHS_obs, rhs_prev).transpose(-1, -2).reshape(N, B, S, d), -20, 20)
+    if nonlin:
+        # Picard: z = tanh(A^T z) + ε ; (A^T z)[n,b,s,i] = Σ_j z[n,b,s,j] A[n,j,i]
+        eps_b = eps_ctrl_set.unsqueeze(0).expand(N, B, S, d)          # [N, B, S, d]
+        z_prev = eps_b
+        for _ in range(n_pic):
+            z_prev = torch.tanh(torch.einsum('nbsj,nji->nbsi', z_prev, A_batch)) + eps_b
+        z_prev = torch.clamp(z_prev, -20, 20)
+    else:
+        rhs_prev = eps_ctrl_set.reshape(B * S, d).T.unsqueeze(0).expand(N, d, B * S).contiguous()
+        z_prev = torch.clamp(_robust_solve(LHS_obs, rhs_prev).transpose(-1, -2).reshape(N, B, S, d), -20, 20)
     u_b = u.view(1, B, 1, d)
     if getattr(model, 'pert_intervene_mode', 'legacy') == 'structural':
         # Fix 1: inject S into the exogenous noise; the SINGLE mutilated solve below propagates
@@ -636,13 +646,21 @@ def perturbation_set_loss_shift_mutilate(
         z_target = z_prev + z_S.unsqueeze(2)                             # [N, B, S, d]
         eps_tilde = model.mix_eps(eps_ctrl_set.unsqueeze(0), z_target, u_b)
 
-    # per-(N,B) mutilated LHS = I − diag(1−u_b) A_n^T   [N, B, d, d]
-    A_T = A_batch.transpose(-1, -2)                                    # [N, d, d]
-    LHS_mut = (I_mat.view(1, 1, d, d)
-               - A_T.view(N, 1, d, d) * one_minus_u.view(1, B, d, 1))  # [N, B, d, d]
-    rhs_mut = eps_tilde.transpose(-1, -2)                              # [N, B, d, S]
-    z_post = _robust_solve(LHS_mut, rhs_mut).transpose(-1, -2)    # [N, B, S, d]
-    z_post = torch.clamp(z_post, -20, 20)
+    if nonlin:
+        # Mutilated Picard: z = diag(1−u)⊙tanh(A^T z) + eps_tilde  [N, B, S, d]
+        omu = one_minus_u.view(1, B, 1, d)                            # [1, B, 1, d]
+        z_post = eps_tilde
+        for _ in range(n_pic):
+            z_post = omu * torch.tanh(torch.einsum('nbsj,nji->nbsi', z_post, A_batch)) + eps_tilde
+        z_post = torch.clamp(z_post, -20, 20)
+    else:
+        # per-(N,B) mutilated LHS = I − diag(1−u_b) A_n^T   [N, B, d, d]
+        A_T = A_batch.transpose(-1, -2)                                    # [N, d, d]
+        LHS_mut = (I_mat.view(1, 1, d, d)
+                   - A_T.view(N, 1, d, d) * one_minus_u.view(1, B, d, 1))  # [N, B, d, d]
+        rhs_mut = eps_tilde.transpose(-1, -2)                              # [N, B, d, S]
+        z_post = _robust_solve(LHS_mut, rhs_mut).transpose(-1, -2)    # [N, B, S, d]
+        z_post = torch.clamp(z_post, -20, 20)
 
     # decode through the SEPARATE perturbation head if present (decouples the GRN decoder
     # from the residual target); it taps z_post so A still gets interventional gradients.

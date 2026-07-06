@@ -33,7 +33,7 @@ class CausalVAE(nn.Module):
                  encoder_type='mlp', sena_mask=None, sena_activation='tanh',
                  pert_intervene_mode='legacy', use_target_gate=False,
                  target_gate_tau=1.0, target_gate_bias_init=3.0,
-                 frozen_decoder_weight=None):
+                 frozen_decoder_weight=None, scm_nonlinear=False, n_picard=40):
         super().__init__()
         # exp20 load-bearing-A fixes:
         #  pert_intervene_mode='structural' → single mutilated solve z_post=(I−diag(1−u)Aᵀ)⁻¹(ε+S),
@@ -67,7 +67,8 @@ class CausalVAE(nn.Module):
             self.encoder = CausalEncoder(input_dim=n_genes, latent_dim=latent_dim,
                                          n_modalities=n_modalities,
                                          n_batches=n_batches)
-        self.dag = DAGModule(d=latent_dim, tau=tau_init, dagma_s=dagma_s, disabled=dag_disabled)
+        self.dag = DAGModule(d=latent_dim, tau=tau_init, dagma_s=dagma_s, disabled=dag_disabled,
+                             scm_nonlinear=scm_nonlinear, n_picard=n_picard)
         if decoder_type == 'mlp':
             self.decoder = MLPDecoder(latent_dim=latent_dim, output_dim=n_genes,
                                       hidden=decoder_hidden, n_layers=decoder_layers)

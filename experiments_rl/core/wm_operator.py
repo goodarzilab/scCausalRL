@@ -29,6 +29,18 @@ class WorldModelOperator:
         self.u_clip_max = m['u_clip_max']
         self.shift_beta = m['shift_beta']
         self.n_dag_samples = int(n_dag_samples)
+        # Gate-aware composition: exp19 ugate/epsmix models carry the non-additive
+        # correction (refine_u / mix_eps) OUTSIDE intervene_shift_mutilate, so the plain
+        # operator would silently drop their epistasis. Detect and route through the gate.
+        # Norman / non-gated models have u_gate=eps_mix_net=None → identical to before.
+        self.gate_aware = (
+            hasattr(model, 'refine_u') and hasattr(model, 'mix_eps')
+            and (getattr(model, 'u_gate', None) is not None
+                 or getattr(model, 'eps_mix_net', None) is not None))
+        if self.gate_aware:
+            print("[wm_operator] gate-aware composition ON "
+                  f"(u_gate={getattr(model, 'u_gate', None) is not None}, "
+                  f"eps_mix={getattr(model, 'eps_mix_net', None) is not None})")
 
     # ----- DAG ensemble ------------------------------------------------------
     @torch.no_grad()
@@ -86,11 +98,36 @@ class WorldModelOperator:
             z = self.scm_forward(epsilon, A)
             return z, torch.zeros(self.d, device=epsilon.device, dtype=epsilon.dtype), epsilon
         z_prev = self.scm_forward(epsilon, A)
-        z_post, u = self.model.intervene_shift_mutilate(
-            epsilon, list(gene_set), A, z_prev,
-            u_mode=self.u_mode, u_clip_max=self.u_clip_max, shift_beta=self.shift_beta)
+        if self.gate_aware:
+            z_post, u = self._intervene_gated(epsilon, list(gene_set), A, z_prev)
+        else:
+            z_post, u = self.model.intervene_shift_mutilate(
+                epsilon, list(gene_set), A, z_prev,
+                u_mode=self.u_mode, u_clip_max=self.u_clip_max, shift_beta=self.shift_beta)
         eps_next = self.model.recover_epsilon_u(z_post, A, u)
         return z_post, u, eps_next
+
+    @torch.no_grad()
+    def _intervene_gated(self, epsilon, gene_set, A, z_prev):
+        """ugate/epsmix-aware do-operator, mirroring epistasis_quartile_eval's do_op:
+        S -> u (shift mode) -> refine_u (gate) -> mix_eps (eps correction) -> mutilated
+        solve. epsilon [B,d], returns (z_post [B,d], u [d])."""
+        gi = torch.as_tensor(gene_set, dtype=torch.long, device=epsilon.device).reshape(-1)
+        S = self.model.compute_shift(gi).sum(dim=0)                      # [d] (gated in exp20)
+        d = self.d
+        if self.u_mode == 'shift':
+            u = (self.shift_beta * S.abs()).clamp(max=1.0)              # [d]
+        else:
+            u = self.model.get_loadings()[gi].sum(dim=0).clamp(0.0, self.u_clip_max)
+        u = self.model.refine_u(u, S)                                   # nonlinear gate (no-op in exp20 struct arms)
+        if getattr(self.model, 'pert_intervene_mode', 'legacy') == 'structural':
+            eps_tilde = epsilon + S.unsqueeze(0)                        # Fix 1: S into exogenous, single solve
+        else:
+            I = torch.eye(d, device=epsilon.device, dtype=epsilon.dtype)
+            z_target = z_prev + torch.linalg.solve(I - A.T, S).unsqueeze(0)   # legacy pre-propagation
+            eps_tilde = self.model.mix_eps(epsilon, z_target, u.unsqueeze(0))
+        z_post, _, _ = self.model.dag.scm_intervene_u(epsilon, A, eps_tilde, u)
+        return z_post, u
 
     @torch.no_grad()
     def apply_ensemble(self, eps_batch, gene_set, A_batch):
@@ -134,12 +171,32 @@ class WorldModelOperator:
         """
         d = self.d
         I = torch.eye(d, device=eps0.device, dtype=eps0.dtype)
-        IA = I - A.T
-        z_prev = torch.linalg.solve(IA, eps0)                      # [d]
-        z_S = torch.linalg.solve(IA, S_batch.T).T                  # [K, d]
-        z_target = z_prev.unsqueeze(0) + z_S                       # [K, d]
         u = (self.shift_beta * S_batch.abs()).clamp(max=1.0)       # [K, d]  (u_mode='shift')
-        eps_tilde = u * z_target + (1.0 - u) * eps0.unsqueeze(0)    # [K, d]
+        # Nonlinear SCM: mutilated Picard z = diag(1−u)⊙tanh(A^T z)+eps_tilde (structural only).
+        if getattr(self.model.dag, 'scm_nonlinear', False) and \
+           getattr(self.model, 'pert_intervene_mode', 'legacy') == 'structural':
+            if self.gate_aware:
+                u = self.model.refine_u(u, S_batch)
+            eps_tilde = eps0.unsqueeze(0) + S_batch                # [K, d]
+            omu = (1.0 - u)                                        # [K, d]
+            z_post = eps_tilde
+            for _ in range(getattr(self.model.dag, 'n_picard', 40)):
+                z_post = omu * torch.tanh(z_post @ A) + eps_tilde  # (A^T z)_k = z_k @ A
+            return torch.clamp(z_post, -20.0, 20.0)
+        if getattr(self.model, 'pert_intervene_mode', 'legacy') == 'structural':
+            # Fix 1: inject S into exogenous, single mutilated solve (no z_target pre-propagation)
+            if self.gate_aware:
+                u = self.model.refine_u(u, S_batch)
+            eps_tilde = eps0.unsqueeze(0) + S_batch                # [K, d]
+        else:
+            IA = I - A.T
+            z_prev = torch.linalg.solve(IA, eps0)                  # [d]
+            z_target = z_prev.unsqueeze(0) + torch.linalg.solve(IA, S_batch.T).T   # [K, d]
+            if self.gate_aware:
+                u = self.model.refine_u(u, S_batch)                # [K, d] nonlinear gate
+                eps_tilde = self.model.mix_eps(eps0.unsqueeze(0), z_target, u)   # [K, d]
+            else:
+                eps_tilde = u * z_target + (1.0 - u) * eps0.unsqueeze(0)    # [K, d]
         Mrow = (1.0 - u)                                           # [K, d]
         LHS = I.unsqueeze(0) - Mrow.unsqueeze(2) * A.T.unsqueeze(0)   # [K, d, d]
         z_post = torch.linalg.solve(LHS, eps_tilde.unsqueeze(2)).squeeze(2)  # [K, d]

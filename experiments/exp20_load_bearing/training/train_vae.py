@@ -389,6 +389,8 @@ def train_vae(config, data_dict=None, device=None):
         target_gate_tau=float(m.get('target_gate_tau', 1.0)),
         target_gate_bias_init=float(m.get('target_gate_bias_init', 3.0)),
         frozen_decoder_weight=frozen_decoder_weight,
+        scm_nonlinear=bool(m.get('scm_nonlinear', False)),
+        n_picard=int(m.get('scm_picard_iters', 40)),
     ).to(device)
 
     print(f"Model: CausalVAE(n_genes={n_genes}, latent_dim={m['latent_dim']}, "
