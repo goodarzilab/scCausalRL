@@ -37,7 +37,7 @@ X20PO_WMS = [t + '_po' for t in X20_WMS]                                        
 X20ARCH_WMS = ['struct_frozenD', 'struct_whiten', 'struct_frozenD_whiten',               # Phase-2 architecture arms
                'staged_esm_s26', 'staged_esm_s36', 'staged_con_s26',
                'staged_frozenD_s26', 'staged_nonlinSCM_s26']
-X20FRZ_WMS = ['struct_frozenD64', 'struct_frozenD_whiten64', 'staged_frozenD64_s26']  # frozen decoder @ latent-64
+X20FRZ_WMS = ['struct_frozenD64', 'struct_frozenD_whiten64', 'staged_frozenD64_s26', 'frozenD64_nonlin']  # frozen decoder @ latent-64
 CHUNK = 256
 
 
