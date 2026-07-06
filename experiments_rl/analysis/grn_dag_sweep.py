@@ -34,6 +34,9 @@ EXP20 = '/home/sgoudarzi/scCausalRL/experiments/exp20_load_bearing'
 X20_WMS = ['struct_min_esm', 'struct_sparse_esm', 'struct_sparse_con', 'struct_sparse_resid',
            'struct_sparse_pertonly', 'struct_sparse_residrecon', 'struct_sparse_all']   # exp20 structural fix
 X20PO_WMS = [t + '_po' for t in X20_WMS]                                                 # prior-OFF reruns
+X20ARCH_WMS = ['struct_frozenD', 'struct_whiten', 'struct_frozenD_whiten',               # Phase-2 architecture arms
+               'staged_esm_s26', 'staged_esm_s36', 'staged_con_s26',
+               'staged_frozenD_s26', 'staged_nonlinSCM_s26']
 CHUNK = 256
 
 
@@ -70,13 +73,13 @@ def predict(op, data, S_list, A, ctrl_recon):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--n_perm', type=int, default=3); ap.add_argument('--device', default=None)
-    ap.add_argument('--grid', default='base', choices=['base', 'grn', 'grnfix', 'sena', 'epsd', 'x20', 'x20po'],
+    ap.add_argument('--grid', default='base', choices=['base', 'grn', 'grnfix', 'sena', 'epsd', 'x20', 'x20po', 'x20arch'],
                     help="grnfix=12 grn-fix; sena=9 SENA/sparsity; epsd=5 ε-decorr; x20=exp20 structural (+baselines)")
     a = ap.parse_args(); dev = torch.device(a.device or ('cuda' if torch.cuda.is_available() else 'cpu')); torch.set_grad_enabled(False)
     import decoupler as dc
     rng = np.random.default_rng(0)
-    wm_list = {'grn': GRN_WMS, 'grnfix': GRNFIX_WMS, 'sena': SENA_WMS, 'epsd': EPSD_WMS, 'x20': X20_WMS, 'x20po': X20PO_WMS}.get(a.grid, WMS)
-    ROOT = EXP20 if a.grid in ('x20', 'x20po') else EXP19
+    wm_list = {'grn': GRN_WMS, 'grnfix': GRNFIX_WMS, 'sena': SENA_WMS, 'epsd': EPSD_WMS, 'x20': X20_WMS, 'x20po': X20PO_WMS, 'x20arch': X20ARCH_WMS}.get(a.grid, WMS)
+    ROOT = EXP20 if a.grid in ('x20', 'x20po', 'x20arch') else EXP19
     NETS = {}; CORR = {}; rows = []
     for tag in wm_list:
         ckpt = f'{ROOT}/results/grid/{tag}/checkpoints/phase1_epoch60.pt'
