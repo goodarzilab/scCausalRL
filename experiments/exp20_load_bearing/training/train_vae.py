@@ -641,6 +641,21 @@ def train_vae(config, data_dict=None, device=None):
         else:
             dag_ramp = 1.0
 
+        # ── Three-stage L0 gate schedule (DECOUPLED from dag_ramp) ──────────────────────
+        # Phase A (recon) → Phase B1 (A learns structure with the target gate held OPEN,
+        # L0=0, so A becomes competent on the DENSE shift) → Phase B2 (ramp L0 to sparsify
+        # the gate NOW that A can carry the propagation). Prevents the gate-vs-A race where
+        # L0 closes gates before A can absorb the redirected signal (esm collapse).
+        # Defaults (start=dag_start, warmin=dag_warmin) reproduce the coupled behaviour.
+        l0_start = int(p1.get('pert_target_l0_start_epoch', dag_start_epoch))
+        l0_warmin = max(int(p1.get('pert_target_l0_warmin', dag_warmin_epochs)), 1)
+        if epoch < l0_start:
+            l0_ramp = 0.0
+        elif epoch < l0_start + l0_warmin:
+            l0_ramp = (epoch - l0_start + 1) / l0_warmin
+        else:
+            l0_ramp = 1.0
+
         optimizer.zero_grad()
 
         # Reset cell-sentence iterator each epoch (it is consumed in sync with obs batches)
@@ -726,7 +741,7 @@ def train_vae(config, data_dict=None, device=None):
                             ident_temp=float(p1.get('pert_ident_temp', 0.2)),
                             dag_util_weight=float(p1.get('pert_dag_util_weight', 0.0)),
                             dag_util_margin=float(p1.get('pert_dag_util_margin', 0.0)),
-                            target_l0_weight=float(p1.get('pert_target_l0', 0.0)) * dag_ramp,
+                            target_l0_weight=float(p1.get('pert_target_l0', 0.0)) * l0_ramp,
                             target_whiten=pert_whiten_t,
                         )
                     elif use_shift_encoder:
@@ -1014,12 +1029,13 @@ def train_vae(config, data_dict=None, device=None):
         if epoch % 5 == 0 or epoch == 1:
             dag_str = f"dag_h={epoch_losses.get('dag', 0):.4f}, " if dag_active else ""
             pert_str = f"pert={epoch_losses.get('pert', 0):.4f}, " if dag_active else ""
+            l0_str = (f"dag_ramp={dag_ramp:.2f}, l0_ramp={l0_ramp:.2f}, " if dag_active else "")
             print(
                 f"Epoch {epoch:3d}/{n_epochs} | "
                 f"total={epoch_losses['total']:.4f}, "
                 f"recon={epoch_losses['recon']:.4f}, "
                 f"kl={epoch_losses['kl']:.4f}, "
-                f"{dag_str}{pert_str}"
+                f"{dag_str}{pert_str}{l0_str}"
                 f"tau={tau_val:.3f}"
             )
 
