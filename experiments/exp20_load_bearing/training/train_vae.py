@@ -618,6 +618,20 @@ def train_vae(config, data_dict=None, device=None):
         # Determine phase parameters
         dag_active = epoch >= dag_start_epoch
 
+        # Hard SELF-membership gate (perturbation-blind localization): once D is warmed up (dag_start),
+        # freeze each gene's shift support to its top-k decoder programs |D[g,:]| — i.e. the latent
+        # programs g's OWN expression loads onto (the direct site of overexpressing g). Downstream
+        # effects then must flow through A. Oracle-free (from D), replaces the learned gate.
+        if p1.get('pert_hard_self_gate', False) and epoch == dag_start_epoch:
+            with torch.no_grad():
+                Dabs = model.decoder.D.detach().abs()                       # [n_genes, d]
+                kk = int(p1.get('hard_self_gate_topk', 4))
+                idx = Dabs.topk(kk, dim=1).indices
+                M = torch.zeros_like(Dabs); M.scatter_(1, idx, 1.0)
+                model.oracle_gate = M.to(device)
+            print(f"[hard-self-gate] oracle_gate = top-{kk} |D| per gene set at epoch {epoch} "
+                  f"(mean open {float(model.oracle_gate.mean()):.3f})", flush=True)
+
         # Freeze theta during Phase A (u-score path only): SCM solve happens but
         # theta does not update.  Unfreeze at dag_start_epoch.
         if theta_frozen_phase_a:
@@ -941,6 +955,8 @@ def train_vae(config, data_dict=None, device=None):
             'gene_names': gene_names,
             'edge_probs': model.dag.get_edge_probs().detach().cpu().numpy(),
             'pert_split': {k: list(v) for k, v in pert_split.items()} if pert_split else None,
+            'oracle_gate': (model.oracle_gate.detach().cpu().numpy()
+                            if getattr(model, 'oracle_gate', None) is not None else None),
         }
         if epoch <= recon_phase_epochs:
             # Phase A: track best recon-only model
@@ -961,6 +977,8 @@ def train_vae(config, data_dict=None, device=None):
                 'model_state_dict': model.state_dict(),
                 'config': config,
                 'gene_names': gene_names,
+                'oracle_gate': (model.oracle_gate.detach().cpu().numpy()
+                                if getattr(model, 'oracle_gate', None) is not None else None),
             }, f'checkpoints/phase1_epoch{epoch}.pt')
 
         # Log

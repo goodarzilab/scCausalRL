@@ -92,6 +92,8 @@ def load_shift_model(checkpoint_path, device):
         scm_solve_ridge=float(cfg_m.get("scm_solve_ridge", 0.0)),
     ).to(device)
     model.load_state_dict(sd)
+    if ckpt.get('oracle_gate') is not None:                 # hard self-membership gate (localization arms)
+        model.oracle_gate = torch.as_tensor(ckpt['oracle_gate'], dtype=torch.float32, device=device)
     model.eval()
     if not model.use_shift_encoder:
         raise RuntimeError("checkpoint has no shift encoder")
