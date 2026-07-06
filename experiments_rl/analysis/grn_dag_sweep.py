@@ -50,7 +50,8 @@ def auroc(score_tf, pairset, tf_rows, n):
     for ti, gi in pairset:
         if ti in rp and gi < n: y[rp[ti], gi] = 1; npos += 1
     if npos == 0: return None
-    return float(roc_auc_score(y.ravel(), score_tf.ravel()))
+    s = np.nan_to_num(score_tf.ravel(), nan=0.0, posinf=0.0, neginf=0.0)   # robust to NaN in D·A·Dᵀ
+    return float(roc_auc_score(y.ravel(), s))
 
 
 def wm_metrics(P, O, drift, thr):
@@ -108,6 +109,11 @@ def main():
         ct, held, tf_rows = NETS['ct'], NETS['held'], NETS['tf_rows']
         # --- GRN stats ---
         D = model.decoder.D.detach().cpu().numpy().astype(np.float64); Araw = model.dag.get_edge_probs().detach().cpu().numpy().astype(np.float64)
+        if not (np.isfinite(D).all() and np.isfinite(Araw).all()):
+            print(f"  [SKIP-NaN] {tag}: NaN/inf in D({(~np.isfinite(D)).sum()}) or Araw({(~np.isfinite(Araw)).sum()}) "
+                  f"— arm diverged in training", flush=True)
+            del model, op, data; gc.collect()
+            continue
         d = Araw.shape[0]; Dtf = D[tf_rows]
         Gtf = np.abs(Dtf @ Araw @ D.T); au = auroc(Gtf, ct, tf_rows, n); auh = auroc(Gtf, held, tf_rows, n)
         sh = [auroc(np.abs(Dtf @ Araw[:, rng.permutation(d)] @ D.T), ct, tf_rows, n) for _ in range(a.n_perm)]

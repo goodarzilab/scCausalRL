@@ -130,7 +130,7 @@ class DAGModule(nn.Module):
         return self._spectral_clamp(A)
 
     @staticmethod
-    def _spectral_clamp(A, max_sn=0.9, n_iter=10):
+    def _spectral_clamp(A, max_sn=0.85, n_iter=20):   # n_iter 10->20, max_sn 0.9->0.85: at d=256 the
         """Scale each A so its spectral norm ≲ max_sn, guaranteeing (I - A^T) is invertible.
 
         ρ(A) ≤ ‖A‖₂ < 1  ⇒  no eigenvalue of A^T hits 1  ⇒  (I - A^T) non-singular, so every

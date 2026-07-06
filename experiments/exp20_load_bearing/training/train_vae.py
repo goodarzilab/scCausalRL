@@ -854,6 +854,13 @@ def train_vae(config, data_dict=None, device=None):
                 losses['total'] = losses['total'] + lam_eps * dag_ramp * eps_decorr
                 losses['eps_decorr'] = eps_decorr.detach()
 
+            # NaN guard: skip a non-finite batch so a transient blowup (e.g. an ill-conditioned
+            # SCM solve at DAG-activation for large latent_dim) can't poison ALL weights via
+            # backward → NaN grads → NaN params. Drop the batch, zero grads, continue.
+            if not torch.isfinite(losses['total']):
+                optimizer.zero_grad()
+                continue
+
             # Gradient accumulation: scale loss and accumulate
             scaled_loss = losses['total'] / accumulation_steps
             scaled_loss.backward()
