@@ -2,7 +2,7 @@
 #SBATCH --job-name=exp20_abl
 #SBATCH --partition=goodarzilab_gpu_priority,gpu_batch_high_mem,gpu_batch
 #SBATCH --gres=gpu:1
-#SBATCH --mem=340G
+#SBATCH --mem=256G   # peak MaxRSS ~215G (measured); 256G = safe headroom + fits more nodes' free-RAM for backfill
 #SBATCH --cpus-per-task=12
 #SBATCH --exclude=GPUCA6E,GPU724A
 #SBATCH --time=16:00:00   # runs take ~11h; short walltime = backfill-eligible (2-day blocked on reservations)
