@@ -16,7 +16,7 @@ import numpy as np, pandas as pd, torch
 from scipy.stats import spearmanr
 HERE = os.path.dirname(os.path.abspath(__file__)); RL = os.path.dirname(HERE); sys.path.insert(0, RL)
 from core.setup_stack import build_stack
-from analysis.grn_dag_sweep import (predict, wm_metrics, X20_WMS, X20PO_WMS, X20ARCH_WMS, _A, EXP20)
+from analysis.grn_dag_sweep import (predict, wm_metrics, X20_WMS, X20PO_WMS, X20ARCH_WMS, X20FRZ_WMS, _A, EXP20)
 from analysis.component_ablation import build_eval
 from sklearn.metrics import roc_auc_score
 
@@ -42,12 +42,12 @@ def fate_auroc(G_tf, tf_idx, fates):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--grid', default='x20po', choices=['x20', 'x20po', 'x20arch'])
+    ap.add_argument('--grid', default='x20po', choices=['x20', 'x20po', 'x20arch', 'x20frz'])
     ap.add_argument('--device', default=None); ap.add_argument('--n_perm', type=int, default=3)
     a = ap.parse_args()
     dev = torch.device(a.device or ('cuda' if torch.cuda.is_available() else 'cpu')); torch.set_grad_enabled(False)
     rng = np.random.default_rng(0)
-    wm_list = {'x20': X20_WMS, 'x20po': X20PO_WMS, 'x20arch': X20ARCH_WMS}[a.grid]
+    wm_list = {'x20': X20_WMS, 'x20po': X20PO_WMS, 'x20arch': X20ARCH_WMS, 'x20frz': X20FRZ_WMS}[a.grid]
 
     fate_df = pd.read_csv(FATE_CSV)
     tf2fate = {str(t).upper(): str(f) for t, f in zip(fate_df['TF'], fate_df['main_fate']) if str(f) != 'nan'}

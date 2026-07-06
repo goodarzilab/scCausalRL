@@ -25,7 +25,7 @@ import numpy as np, pandas as pd, torch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from core.setup_stack import build_stack
-from analysis.grn_dag_sweep import predict, wm_metrics, CHUNK, GRNFIX_WMS, SENA_WMS, EPSD_WMS, X20_WMS, X20PO_WMS, X20ARCH_WMS, _A, EXP19, EXP20
+from analysis.grn_dag_sweep import predict, wm_metrics, CHUNK, GRNFIX_WMS, SENA_WMS, EPSD_WMS, X20_WMS, X20PO_WMS, X20ARCH_WMS, X20FRZ_WMS, _A, EXP19, EXP20
 
 
 def build_eval(op, data):
@@ -58,13 +58,13 @@ def rand_shift(S, g):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--grid', default='sena', choices=['grnfix', 'sena', 'epsd', 'x20', 'x20po', 'x20arch'])
+    ap.add_argument('--grid', default='sena', choices=['grnfix', 'sena', 'epsd', 'x20', 'x20po', 'x20arch', 'x20frz'])
     ap.add_argument('--device', default=None)
     a = ap.parse_args()
     dev = torch.device(a.device or ('cuda' if torch.cuda.is_available() else 'cpu'))
     torch.set_grad_enabled(False)
-    wm_list = {'grnfix': GRNFIX_WMS, 'sena': SENA_WMS, 'epsd': EPSD_WMS, 'x20': X20_WMS, 'x20po': X20PO_WMS, 'x20arch': X20ARCH_WMS}[a.grid]
-    ROOT = EXP20 if a.grid in ('x20', 'x20po', 'x20arch') else EXP19
+    wm_list = {'grnfix': GRNFIX_WMS, 'sena': SENA_WMS, 'epsd': EPSD_WMS, 'x20': X20_WMS, 'x20po': X20PO_WMS, 'x20arch': X20ARCH_WMS, 'x20frz': X20FRZ_WMS}[a.grid]
+    ROOT = EXP20 if a.grid in ('x20', 'x20po', 'x20arch', 'x20frz') else EXP19
     rng = np.random.default_rng(0); g = torch.Generator(device='cpu').manual_seed(0)
     rows = []
     for tag in wm_list:
