@@ -565,6 +565,11 @@ def perturbation_set_loss_shift_mutilate(
     target_l0_weight=0.0,     # exp20 Fix 2: L0 penalty on the sparse per-TF target gate (open-prob)
     target_whiten=None,       # [G] per-gene std of the (drift-removed) target Δ: MSE on whitened
                               # residual so global MAGNITUDE stops being the easy win (mode-collapse fix)
+    pseudobulk_targets=None,  # [n_genes, G] per-TF POPULATION-mean Δ (high-SNR); replaces the noisy
+                              # per-sentence (~64-cell) mean target for singles. Lever A (granularity).
+    project_shared=False,     # project the shared DIRECTION (drift/‖drift‖) out of the pred−target error
+                              # before MSE — the loss rewards only the TF-specific (shared-orthogonal)
+                              # component (Gram-Schmidt f_θ ⊥ shared). Lever B (shared handling).
 ):
     """Shift-FED MUTILATION set loss (Tier-2): the shift defines the latent target,
     the do-operator (column-mutilated SCM) propagates it.
@@ -601,7 +606,12 @@ def perturbation_set_loss_shift_mutilate(
     gi_c = gene_idx.clamp(min=0)
     S_per = model.compute_shift(gi_c)                                  # [B, K, d]
     S_shift = (S_per * gmask.unsqueeze(-1)).sum(1)                     # [B, d]  (1 gene single, 2 combo)
-    dx_all = (x_pert_set.mean(1) - x_ctrl_set.mean(1)).detach()        # [B, G]
+    if pseudobulk_targets is not None:
+        # Lever A: per-TF population mean (high SNR) instead of the per-sentence ~64-cell mean.
+        # Singles: one gene per sentence (gi_c[:,0]); combos sum the per-TF means over the set.
+        dx_all = (pseudobulk_targets[gi_c] * gmask.unsqueeze(-1)).sum(1).detach()   # [B, G]
+    else:
+        dx_all = (x_pert_set.mean(1) - x_ctrl_set.mean(1)).detach()    # [B, G]
     if residual_target and drift is not None:
         dx_all = dx_all - drift.view(1, -1)                            # train on TF-specific residual
 
@@ -670,14 +680,16 @@ def perturbation_set_loss_shift_mutilate(
     x_hat_prev = pert_dec(z_prev.reshape(-1, d)).reshape(N, B, S, G)
 
     delta_pred = (x_hat_post - x_hat_prev).mean(dim=2)                 # [N, B, G]
+    err = delta_pred - dx_all[None, :, :]                             # [N, B, G]
+    if project_shared and drift is not None:
+        # Lever B: remove the shared-DIRECTION component of the error so the loss rewards only the
+        # TF-specific (shared-orthogonal) structure. u = drift/‖drift‖; err ← err − (err·u)u.
+        u = drift / (drift.norm() + 1e-8)                             # [G] unit shared direction
+        err = err - (err @ u).unsqueeze(-1) * u                       # [N, B, G] ⊥ shared
     if target_whiten is not None:
-        # whiten per gene: divide pred+target by the target's per-gene std → the loss rewards
-        # getting the DIRECTION of the residual right, not its overall magnitude (kills the
-        # shift_scale shortcut that collapses all TFs to one scaled shared program).
-        w = target_whiten.view(1, 1, -1).clamp_min(1e-3)
-        mse_term = ((delta_pred - dx_all[None, :, :]) / w).pow(2).mean()
-    else:
-        mse_term = (delta_pred - dx_all[None, :, :]).pow(2).mean()
+        # whiten per gene: divide by the target's per-gene std → reward residual DIRECTION not magnitude.
+        err = err / target_whiten.view(1, 1, -1).clamp_min(1e-3)
+    mse_term = err.pow(2).mean()
 
     # DAG-UTILIZATION: predict the SAME Δ with A=0 (the decoder+shift bypass). With A=0 the
     # SCM is identity: z_prev0=ε, z_target0=ε+S, ε̃0=mix_eps(...), z_post0=ε̃0 (no solves).

@@ -293,6 +293,18 @@ def train_vae(config, data_dict=None, device=None):
     # exp20 Phase-2 mode-collapse fix: per-gene std of the drift-removed target Δ over train TFs.
     # Whitening the MSE by this makes the loss reward getting the residual DIRECTION right rather
     # than its magnitude → starves the single-scalar shift_scale shortcut that collapses all TFs.
+    # Pseudobulk per-TF target (Lever A): fixed per-TF population-mean Δ (de_single), high SNR vs the
+    # resampled ~64-cell sentence mean. [n_genes, G], zeros for genes without a de_single entry.
+    pseudobulk_t = None
+    if bool(config['phase1'].get('pert_pseudobulk_target', False)):
+        pb = np.zeros((n_genes, n_genes), np.float32); n_ok = 0
+        for i, gname in enumerate(gene_names):
+            dv = _de.get(gname)
+            if dv is not None:
+                pb[i] = np.asarray(dv, np.float32); n_ok += 1
+        pseudobulk_t = torch.tensor(pb, dtype=torch.float32, device=device)
+        print(f"pseudobulk target: per-TF population-mean Δ for {n_ok}/{n_genes} genes")
+
     pert_whiten_t = None
     if bool(config['phase1'].get('pert_whiten_target', False)) and _drift_genes and delta_drift_np is not None:
         _res = np.stack([np.asarray(_de[g], np.float32) - delta_drift_np for g in _drift_genes])  # [T, G]
@@ -746,6 +758,8 @@ def train_vae(config, data_dict=None, device=None):
                             dag_util_margin=float(p1.get('pert_dag_util_margin', 0.0)),
                             target_l0_weight=float(p1.get('pert_target_l0', 0.0)) * l0_ramp,
                             target_whiten=pert_whiten_t,
+                            pseudobulk_targets=pseudobulk_t,
+                            project_shared=bool(p1.get('pert_project_shared', False)),
                         )
                     elif use_shift_encoder:
                         # Learned-shift set loss (MSE on mean shift + MMD [+ energy]).
