@@ -96,6 +96,7 @@ def main():
     ap.add_argument('--scm', default='linear', choices=['linear', 'nonlinear'])
     ap.add_argument('--decoder', default='learn', choices=['learn', 'frozen'])
     ap.add_argument('--epochs', type=int, default=400); ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--l0', type=float, default=0.02)   # target-gate L0 weight (sweep to force sparsity)
     a = ap.parse_args()
     torch.manual_seed(a.seed); nonlin = a.scm == 'nonlinear'
     syn = gen(nonlinear=nonlin, seed=a.seed)
@@ -130,7 +131,7 @@ def main():
                 xc, xp, gene_idx=gi, batch_id=torch.zeros(16, dtype=torch.long), modality_id=None,
                 model=model, n_dag_samples=1, mse_weight=1.0, mmd_weight=0.0, u_mode='shift', shift_beta=1.0,
                 contrastive_weight=1.0, drift=drift_tr, residual_target=True,
-                pseudobulk_targets=pb, project_shared=True, target_l0_weight=0.02)
+                pseudobulk_targets=pb, project_shared=True, target_l0_weight=a.l0)
             loss = loss + 5.0 * pl
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
@@ -166,10 +167,16 @@ def main():
             return float(np.nanmean([spearmanr(np.abs((P - drift)[i]), np.abs((obs - drift)[i])).correlation
                                      for i in range(len(P))]))
         agap = sp(P_real) - sp(P_zero)
+        # probe_A: does A CHANGE the held-out output (1−cos(Δ_realA, Δ_zeroA)), matching the Joung probe
+        def _c(a, b):
+            a = a - a.mean(); b = b - b.mean()
+            return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+        probe_A = float(np.mean([1 - _c(P_real[i], P_zero[i]) for i in range(len(te))]))
         # gate openness on held-out
         gate = float(model.compute_gate_prob(torch.tensor(te)).mean())
-    print(f"  RESULT scm={a.scm} dec={a.decoder}: graph_AUROC={au:.3f} | heldout disc_resid={dc_r:.3f} "
-          f"(zeroA {dc_z:.3f}) pear_resid={pe_r:.3f} | A_gap(drift-rem)={agap:+.3f} | gate_open={gate:.3f}", flush=True)
+    print(f"  RESULT scm={a.scm} dec={a.decoder} l0={a.l0}: graph_AUROC={au:.3f} | heldout disc_resid={dc_r:.3f} "
+          f"(zeroA {dc_z:.3f}) pear_resid={pe_r:.3f} | A_gap(drift-rem)={agap:+.3f} | probe_A={probe_A:.3f} | "
+          f"gate_open={gate:.3f}", flush=True)
 
 
 if __name__ == '__main__':
