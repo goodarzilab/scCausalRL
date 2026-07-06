@@ -105,18 +105,22 @@ def main():
     ap.add_argument('--epochs', type=int, default=400); ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--l0', type=float, default=0.02)   # target-gate L0 weight (sweep to force sparsity)
     ap.add_argument('--graph', default='acyclic', choices=['acyclic','cyclic'])
+    ap.add_argument('--hard_target', action='store_true')   # perturbation-blind: shift only at true site
     a = ap.parse_args()
     torch.manual_seed(a.seed); nonlin = a.scm == 'nonlinear'
     syn = gen(nonlinear=nonlin, seed=a.seed, graph=a.graph)
     d, G, k = syn['d'], syn['G'], syn['k']
     import numpy as _np
-    _ev = _np.abs(_np.linalg.eigvals(syn['A'].numpy())); print(f"=== SYNTHETIC POC | scm={a.scm} dec={a.decoder} graph={a.graph} | A* spectral_radius={_ev.max():.3f} cyclic_edges_lowertri={int((syn['A'].tril(-1).abs()>1e-6).sum())} | d={d} G={G} train/test TF={len(syn['train'])}/{len(syn['test'])} ===", flush=True)
+    _ev = _np.abs(_np.linalg.eigvals(syn['A'].numpy())); print(f"=== SYNTHETIC POC | scm={a.scm} dec={a.decoder} graph={a.graph} hard_target={a.hard_target} | A* spectral_radius={_ev.max():.3f} cyclic_edges_lowertri={int((syn['A'].tril(-1).abs()>1e-6).sum())} | d={d} G={G} train/test TF={len(syn['train'])}/{len(syn['test'])} ===", flush=True)
 
     model = CausalVAE(n_genes=G, latent_dim=d, use_shift_encoder=True, shift_label_dim=k,
                       shift_hidden=128, shift_n_layers=1, decoder_type='linear',
                       pert_intervene_mode='structural', use_target_gate=True, target_gate_bias_init=3.0,
                       scm_nonlinear=nonlin, n_picard=40)
     model.set_pert_labels(syn['desc'])                                          # planted descriptor = the bridge
+    if a.hard_target:
+        og = torch.zeros(G, d); og[:syn['Sstar'].shape[0]] = (syn['Sstar'].abs() > 1e-6).float()  # true support
+        model.oracle_gate = og                                                  # perturbation-blind hard target
     if a.decoder == 'frozen':
         with torch.no_grad():
             model.decoder.D.copy_(syn['D'])

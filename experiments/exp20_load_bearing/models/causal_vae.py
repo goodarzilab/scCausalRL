@@ -199,6 +199,12 @@ class CausalVAE(nn.Module):
         # Fix 2: sparse per-TF target gate (ones when use_target_gate=False → identical to legacy).
         # Single choke point — every S-producer routes through compute_shift, so S is gated everywhere.
         gate = self.shift_encoder.sample_gate(label)      # [..., d] soft(train)/hard(eval)
+        # Perturbation-blind (oracle hard-target) hook: if set, the shift can act ONLY at the true
+        # intervention site — removes the dense-shift absorption channel so downstream effects must
+        # flow through A. Off by default (getattr → None) → normal learned gate. Synthetic-eval only.
+        og = getattr(self, 'oracle_gate', None)
+        if og is not None:
+            gate = og[gi]
         return self.shift_scale * (gate * shift)
 
     def compute_gate_prob(self, gene_idx):
