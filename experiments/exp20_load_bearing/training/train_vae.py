@@ -184,6 +184,16 @@ def train_vae(config, data_dict=None, device=None):
                 combo_proc_path=config['data'].get('joung_combo_proc_path'),
                 min_combo_cells=int(config['data'].get('min_combo_cells', 20)),
             )
+        elif dataset_name == 'joung_norman':
+            from data.load_joung_norman import load_joung_norman
+            data_dict = load_joung_norman(
+                norman_path=config['data'].get('norman_path',
+                                               '/large_storage/goodarzilab/shervin/CausalBioRL/Norman/'),
+                train_frac=config['data'].get('single_pert_train_frac', 0.8),
+                val_frac=config['data'].get('single_pert_val_frac', 0.1),
+                split_seed=config['data'].get('split_seed', 42),
+                min_cells_per_pert=config['data'].get('min_cells_per_pert', 5),
+            )
         elif dataset_name == 'combined':
             from data.load_combined import load_combined
             data_dict = load_combined(
