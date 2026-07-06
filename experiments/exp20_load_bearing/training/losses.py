@@ -618,7 +618,8 @@ def perturbation_set_loss_shift_mutilate(
 
     A_batch = model.dag.sample_A(n_samples=N)                          # [N, d, d]
     I_mat = torch.eye(d, device=device, dtype=A_batch.dtype)
-    LHS_obs = I_mat.unsqueeze(0) - A_batch.transpose(-1, -2)           # [N, d, d]
+    ridge = getattr(model.dag, 'solve_ridge', 0.0)                     # Tikhonov γ (default 0)
+    LHS_obs = (1.0 + ridge) * I_mat.unsqueeze(0) - A_batch.transpose(-1, -2)   # [N, d, d]
     nonlin = getattr(model.dag, 'scm_nonlinear', False)
     n_pic = getattr(model.dag, 'n_picard', 40)
 
@@ -656,7 +657,7 @@ def perturbation_set_loss_shift_mutilate(
     else:
         # per-(N,B) mutilated LHS = I − diag(1−u_b) A_n^T   [N, B, d, d]
         A_T = A_batch.transpose(-1, -2)                                    # [N, d, d]
-        LHS_mut = (I_mat.view(1, 1, d, d)
+        LHS_mut = ((1.0 + ridge) * I_mat.view(1, 1, d, d)
                    - A_T.view(N, 1, d, d) * one_minus_u.view(1, B, d, 1))  # [N, B, d, d]
         rhs_mut = eps_tilde.transpose(-1, -2)                              # [N, B, d, S]
         z_post = _robust_solve(LHS_mut, rhs_mut).transpose(-1, -2)    # [N, B, S, d]

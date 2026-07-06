@@ -88,7 +88,8 @@ def load_shift_model(checkpoint_path, device):
         use_target_gate=bool(cfg_m.get('use_target_gate', False)),
         target_gate_tau=float(cfg_m.get('target_gate_tau', 1.0)),
         scm_nonlinear=bool(cfg_m.get('scm_nonlinear', False)),
-        n_picard=int(cfg_m.get('scm_picard_iters', 40)),
+        n_picard=int(cfg_m.get("scm_picard_iters", 40)),
+        scm_solve_ridge=float(cfg_m.get("scm_solve_ridge", 0.0)),
     ).to(device)
     model.load_state_dict(sd)
     model.eval()

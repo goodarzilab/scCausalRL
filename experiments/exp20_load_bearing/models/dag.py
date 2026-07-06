@@ -76,6 +76,10 @@ class DAGModule(nn.Module):
         # Jacobian (I − diag(tanh')A^T)^{-1} (see jacobian_inverse).
         self.scm_nonlinear = bool(scm_nonlinear)
         self.n_picard = int(n_picard)
+        # Tikhonov ridge γ added to the diagonal before every inversion:
+        # (I − diag(1−u)Aᵀ + γI)⁻¹. Guards ill-conditioned solves (e.g. frozen decoder / large d)
+        # where a near-singular (I−Aᵀ) produces inf/NaN. γ=0 → exact SCM (default).
+        self.solve_ridge = 0.0
         self.register_buffer('tau', torch.tensor(tau, dtype=torch.float32))
 
         # Gate logits.  Initialised near zero so the gate sigmoid sits around 0.5
@@ -248,8 +252,8 @@ class DAGModule(nn.Module):
         d = self.d
         device = epsilon.device
         I = torch.eye(d, device=device, dtype=epsilon.dtype)
-        # Solve (I - A^T) @ z^T = epsilon^T
-        LHS = I - A.T  # [d, d]
+        # Solve (I - A^T + γI) @ z^T = epsilon^T   (γ = Tikhonov ridge, default 0)
+        LHS = (1.0 + self.solve_ridge) * I - A.T  # [d, d]
         # solve LHS @ X = B, where B = epsilon.T (ridge fallback if singular)
         z = _robust_solve(LHS, epsilon.T).T  # [B, d]
         z = torch.clamp(z, min=-20.0, max=20.0)  # safety clamp if (I-A^T) ill-conditioned
@@ -374,8 +378,8 @@ class DAGModule(nn.Module):
                 z = omu * torch.tanh(z @ A) + eps_tilde
             z = torch.clamp(z, min=-20.0, max=20.0)
             return z, A_tilde, M
-        # LHS = I - M A^T = I - diag(1-u) · A^T
-        LHS = I - one_minus_u.unsqueeze(1) * A.T                      # [d, d]
+        # LHS = (1+γ)I - M A^T = (1+γ)I - diag(1-u) · A^T   (γ = Tikhonov ridge, default 0)
+        LHS = (1.0 + self.solve_ridge) * I - one_minus_u.unsqueeze(1) * A.T   # [d, d]
         z = _robust_solve(LHS, eps_tilde.T).T                         # [B, d]
         z = torch.clamp(z, min=-20.0, max=20.0)
         return z, A_tilde, M
