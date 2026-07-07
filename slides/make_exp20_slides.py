@@ -167,8 +167,29 @@ bullets(s,0.6,5.85,12,0.9,[
  'CollecTRI / DoRothEA AUROC  +  fetal-atlas fate-hierarchy AUROC (same-fate TF pairs)'],size=13.5)
 foot(s,'All arms evaluated on the FINAL epoch-60 checkpoint (not best-by-val-loss).')
 
-# ═══ 6 · FIG 1 prediction ladder ═══
-s=slide_blank(); title_bar(s,'6 · Perturbation prediction — nothing beats the prior-off ceiling')
+# ═══ 6 · Metric definitions ═══
+s=slide_blank(); title_bar(s,'6 · Metric definitions & chance levels')
+text(s,0.5,0.95,12.4,0.4,'c(a,b) = mean-centered cosine.   r̂=pred−drift, r=obs−drift.   Δ̂(A)=do-op prediction under adjacency A  (A=0 zeroed, Aπ column-shuffled).',size=11,italic=True,color=GRAY)
+label(s,0.5,1.45,6,'Prediction   (chance 0.5)',color=RED)
+eq(s,0.6,1.9,'d_disc',[r'$\mathrm{disc\_resid}=\frac{1}{T}\sum_i\frac{1}{T-1}\sum_{j\neq i}\mathbf{1}\,[\,c(\hat{r}_i,r_i)>c(\hat{r}_i,r_j)\,]$'],width=6.1,fontsize=13)
+eq(s,0.6,2.7,'d_pear',[r'$\mathrm{pear\_resid}=\frac{1}{T}\sum_i \mathrm{corr}(\hat{r}_i,\,r_i)$'],width=3.5,fontsize=13)
+label(s,0.5,3.45,6,'Causality — is A load-bearing?',color=BLUE)
+eq(s,0.6,3.9,'d_agap',[r'$S\_A_{gap}=\rho(A_{\mathrm{real}})-\max(\rho(0),\,\rho(A_{\pi}))$',
+                       r'$\rho(A)=\frac{1}{T}\sum_i \mathrm{spearman}_{g\in DEG_i}(|\hat{\Delta}_i(A)_g-d_g|,\,|\Delta_{i,g}-d_g|)$'],width=6.7,fontsize=12)
+eq(s,0.6,5.0,'d_probeA',[r'$\mathrm{probe\_A}=\frac{1}{T}\sum_i[\,1-c(\hat{\Delta}_i(A_{\mathrm{real}}),\,\hat{\Delta}_i(0))\,]$'],width=5.6,fontsize=13)
+label(s,7.05,1.45,6,'Mechanism',color=PURPLE)
+eq(s,7.15,1.9,'d_dperm',[r'$\mathrm{probe\_Dperm}=\frac{1}{T}\sum_i[\,1-c(\hat{\Delta}_i(D),\,\hat{\Delta}_i(D_{\pi}))\,]$'],width=5.7,fontsize=12.5)
+eq(s,7.15,2.7,'d_cross',[r'$\mathrm{crossTF\_div}=\mathrm{mean}_{i<j}[\,1-c(\hat{\Delta}_i,\hat{\Delta}_j)\,]$'],width=5.2,fontsize=12.5)
+label(s,7.05,3.45,6,'Biology  (AUROC, prior-free)',color=GREEN)
+eq(s,7.15,3.9,'d_grn',[r'$\mathrm{collectri}=\mathrm{AUROC}(\mathbf{1}[tf\!\rightarrow\!g],\ |D_{tf}AD^{\top}|)$'],width=5.9,fontsize=12)
+eq(s,7.15,4.5,'d_fate',[r'$\mathrm{fate}=\mathrm{AUROC}(\mathbf{1}[\mathrm{fate}_i{=}\mathrm{fate}_j],\ |G_{ij}|)$'],width=5.6,fontsize=12)
+eq(s,7.15,5.1,'d_graph',[r'$\mathrm{graph}=\mathrm{AUROC}(\mathbf{1}[|A^{*}_{ij}|{>}0],\ |A^{\mathrm{learn}}_{ij}|)$'],width=5.6,fontsize=12)
+box(s,0.5,5.95,12.4,1.05,fill=RGBColor(0xF5,0xF5,0xEA),line=AMBER)
+text(s,0.72,6.05,12.0,0.95,'KEY DISTINCTION: probe_A = “A is USED” (output changes if A removed);  S_Agap = “A is USEFUL” (drift-removed prediction improves). '
+     'Finding: probe_A can be 0.8 while S_Agap≈0 — used, not useful.   Note: grn_dag_sweep’s “disc” column = retrieval-top-1 (chance 1/T≈0.006), NOT disc_resid (chance 0.5).',size=11.5,bold=True,color=DARK)
+
+# ═══ 7 · FIG 1 prediction ladder ═══
+s=slide_blank(); title_bar(s,'7 · Perturbation prediction — nothing beats the prior-off ceiling')
 figim(s,0.5,1.05,5.9,os.path.join(FIG,'fig1_prediction_ladder.png'))
 bullets(s,8.4,1.5,4.6,5,[
  'Best = prior-off sparse_con 0.639 ≈ exp19 epsmix ceiling 0.647.',
@@ -178,15 +199,15 @@ bullets(s,8.4,1.5,4.6,5,[
  'Net: no architectural/objective fix beat a simple prior-off shift+decoder.'],size=14,color=DARK)
 foot(s,'Held-out zero-shot TFs; disc_resid, chance 0.5, exp19 ceiling 0.647.')
 
-# ═══ 7 · FIG 2 causality ═══
-s=slide_blank(); title_bar(s,'7 · Causality — A is not load-bearing')
+# ═══ 8 · FIG 2 causality ═══
+s=slide_blank(); title_bar(s,'8 · Causality — A is not load-bearing')
 figim(s,0.5,1.1,4.9,os.path.join(FIG,'fig2_causality_Agap.png'),w=12.3)
 bullets(s,0.6,6.2,12.4,1.0,[
  'real-A ≈ zero-A ≈ shuffled-A on drift-removed prediction; A_gap ≈ 0 for every prior-off arm (±0.05). '
  'Removing or shuffling A barely changes the match — A carries no predictive causal structure.'],size=13.5,color=DARK)
 
-# ═══ 8 · FIG 3 mechanism ═══
-s=slide_blank(); title_bar(s,'8 · Mechanism — decoder absorbs the operator; predictions collapse')
+# ═══ 9 · FIG 3 mechanism ═══
+s=slide_blank(); title_bar(s,'9 · Mechanism — decoder absorbs the operator; predictions collapse')
 figim(s,0.5,1.05,5.4,os.path.join(FIG,'fig3_mechanism.png'))
 label(s,9.0,1.3,4.1,'Why A is redundant')
 eq(s,9.0,1.8,'absorb2',[r'$\Delta = D\,\Delta z$'],width=2.0,fontsize=16)
@@ -197,8 +218,8 @@ bullets(s,9.0,2.5,4.1,4.2,[
  'A single scalar shift_scale absorbs 27–47% of the pert-loss gradient.'],size=13,color=DARK)
 foot(s,'The shift is load-bearing for MAGNITUDE, not identity; the decoder carries the gene-space pattern.')
 
-# ═══ 9 · FIG 4 biology ═══
-s=slide_blank(); title_bar(s,'9 · Biology — the projected GRN is prior memorization')
+# ═══ 10 · FIG 4 biology ═══
+s=slide_blank(); title_bar(s,'10 · Biology — the projected GRN is prior memorization')
 figim(s,0.5,1.05,5.4,os.path.join(FIG,'fig4_biology_grn.png'))
 bullets(s,9.0,1.5,4.1,5,[
  'CollecTRI AUROC 0.98 (prior ON) → 0.57 (prior OFF) = co-expression floor.',
@@ -207,8 +228,8 @@ bullets(s,9.0,1.5,4.1,5,[
  'random-D → chance confirms D carries the (co-expression) signal.'],size=13.5,color=DARK)
 foot(s,'Prior-free GRN validation: neither TF→target edges nor developmental hierarchy are recovered from data.')
 
-# ═══ 10 · FIG 5 R-sweep ═══
-s=slide_blank(); title_bar(s,'10 · Objective sweep — break mode collapse, but not generalization')
+# ═══ 11 · FIG 5 R-sweep ═══
+s=slide_blank(); title_bar(s,'11 · Objective sweep — break mode collapse, but not generalization')
 eq(s,0.5,1.0,'decomp',[r'$\Delta_{\mathrm{pred}}(p)=\;o\;(\mathrm{shared\ offset})\;+\;f(\mathrm{shift}(p),A)\;(\mathrm{TF\text{-}specific})$'],width=8.6,fontsize=15)
 text(s,0.55,1.75,9.5,0.4,'Lever A: pseudobulk per-TF target (SNR).   Lever B: project the shared direction out of the loss.',size=13,color=GRAY)
 figim(s,0.5,2.2,4.5,os.path.join(FIG,'fig5_Rsweep.png'),w=12.3)
@@ -216,8 +237,8 @@ bullets(s,0.6,6.85,12.4,0.8,[
  'Pseudobulk (Lever A) lifts crossTF_div 0.03→0.2 and probe_A→0.9 (A engaged) — but disc stays at chance: '
  'diverse-but-WRONG. Project-out alone (R3) does nothing. The binding constraint is zero-shot generalization.'],size=12.5,color=DARK)
 
-# ═══ 11 · FIG 6 train/test gap ═══
-s=slide_blank(); title_bar(s,'11 · Generalization is the wall — memorize seen, fail unseen')
+# ═══ 12 · FIG 6 train/test gap ═══
+s=slide_blank(); title_bar(s,'12 · Generalization is the wall — memorize seen, fail unseen')
 figim(s,0.5,1.15,5.5,os.path.join(FIG,'fig6_train_vs_heldout.png'))
 bullets(s,8.4,1.6,4.6,5,[
  'sparse_con: TRAIN disc 0.93 → held-out 0.62 (+0.31 gap).',
@@ -226,8 +247,8 @@ bullets(s,8.4,1.6,4.6,5,[
  'pseudobulk arms fit train worse (0.56) and still fail held-out.'],size=14,color=DARK)
 foot(s,'The failure is zero-shot generalization of the TF→effect map — not fitting capacity.')
 
-# ═══ 12 · FIG 7 synthetic ═══
-s=slide_blank(); title_bar(s,'12 · Synthetic control — method sound, A non-identifiable')
+# ═══ 13 · FIG 7 synthetic ═══
+s=slide_blank(); title_bar(s,'13 · Synthetic control — method sound, A non-identifiable')
 eq(s,0.5,1.0,'syn',[r'$S^{*}_{g}=m_g\odot(W^{*}d_g),\qquad x=D^{*}z+\sigma\eta$'],width=6.0,fontsize=15)
 text(s,6.8,1.15,6.2,0.4,'planted A*, sparse shift LINEAR in the descriptor (generalizable)',size=12,italic=True,color=GRAY)
 figim(s,0.5,1.9,4.35,os.path.join(FIG,'fig7_synthetic.png'),w=12.3)
@@ -235,8 +256,8 @@ bullets(s,0.6,6.5,12.4,0.9,[
  'Planted A*/D*/generalizable shift: the shift-encoder GENERALIZES (disc 0.66; perturbation-blind localization → 0.90) '
  'but graph-recovery AUROC stays at CHANCE (~0.5) — A is non-identifiable (shift+decoder are a sufficient statistic).'],size=12.5,color=DARK)
 
-# ═══ 13 · Master results table ═══
-s=slide_blank(); title_bar(s,'13 · Master results (representative arms, prior-off)')
+# ═══ 14 · Master results table ═══
+s=slide_blank(); title_bar(s,'14 · Master results (representative arms, prior-off)')
 rows=[['arm','fix','disc_resid','S_Agap','crossTF','verdict'],
  ['sparse_con','baseline (best)','0.639','−0.05','0.02','ceiling; A idle'],
  ['sparse_pertonly','baseline','0.621','−0.03','0.02','—'],
@@ -255,8 +276,8 @@ text(s,0.65,5.3,12.1,1.4,'Reference: exp19 best (epsmix, prior-on) disc_resid 0.
      'no arm both discriminates AND uses A.',size=13,bold=True,color=DARK)
 foot(s,'Full 22-arm table in docs/MASTER_ALL.md; figures in docs/figures/.')
 
-# ═══ 14 · Verdict & next levers ═══
-s=slide_blank(); title_bar(s,'14 · Verdict & the two real levers')
+# ═══ 15 · Verdict & next levers ═══
+s=slide_blank(); title_bar(s,'15 · Verdict & the two real levers')
 box(s,0.4,1.1,12.5,1.7,fill=RGBColor(0xEC,0xF7,0xEC),line=GREEN)
 text(s,0.65,1.25,12.0,1.5,'CONCLUSION — The architecture is sound (it generalizes on ideal synthetic data). On Joung the binding '
      'constraint is ZERO-SHOT GENERALIZATION of the TF→effect map (models memorize seen TFs, disc 0.93→0.62). '
