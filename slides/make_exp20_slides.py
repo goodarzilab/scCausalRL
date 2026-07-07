@@ -134,22 +134,30 @@ bullets(s,7.05,1.75,5.6,4.6,[
  'Consequence: discrimination pinned near chance (0.5).'],size=13.5)
 foot(s,'These are SEPARATE problems: #1 is architecture/identifiability; #2 is objective + data SNR.')
 
-# ═══ 4 · The changes we ran (ablation catalog) ═══
-s=slide_blank(); title_bar(s,'4 · What we changed — the ablation catalog')
-rows=[['Fix / arm','What it changes','Targets'],
+# ═══ 4 · The changes we ran (ablation catalog + run names) ═══
+s=slide_blank(); title_bar(s,'4 · What we changed — ablations & the runs (all PRIOR-OFF)')
+rows=[['Fix (ingredient)','What it changes','Targets'],
  ['Fix 1 · structural do-op','single mutilated solve, S into exogenous noise (no z-target leak)','A inert'],
- ['Fix 2 · sparse L0 gate','2nd ESM head gates programs; L0 on gate existence (soft→hard)','A inert'],
- ['prior OFF','remove CollecTRI margin loss (was memorized into G)','honest GRN'],
+ ['Fix 2 · sparse L0 gate','2nd ESM head gates programs; L0 on gate existence (soft to hard)','A inert'],
  ['frozen GO+PCA decoder','D fixed to GO:BP membership + PCA cols (requires_grad=False)','absorption'],
  ['whitened pert target','MSE on drift-removed + per-gene z-scored residual','mode collapse'],
+ ['pseudobulk target','per-TF population-mean delta instead of noisy per-cell mean','SNR / collapse'],
+ ['project-out shared dir','remove the drift-direction component of the error','shared handling'],
  ['staged 3-phase L0','decouple gate-closing from A-learning (A competent first)','gate-vs-A race'],
- ['nonlinear SCM','z=tanh(Aᵀz)+ε via Picard; Jacobian GRN','A expressiveness'],
- ['hard self-gate','shift restricted to gene g’s own top-k decoder programs','localization'],
+ ['nonlinear SCM','z=tanh(A^T z)+eps via Picard; Jacobian GRN','A expressiveness'],
+ ['hard self-gate','shift restricted to gene g own top-k decoder programs','localization'],
  ['multi-context (+Norman)','2nd cell context via modality token; ESM bridge; shared held-out','generalization']]
-table(s,0.4,1.05,12.55,rows,[2.5,7.15,2.9],fs=12.5,hfs=13)
-eq(s,0.5,5.4,'l0',[r'$\mathcal{L}_{L0}=\lambda\,\mathbb{E}\,[\,\sigma(\ell/\tau)\,]$'],width=2.9,fontsize=15)
-text(s,3.5,5.55,7,0.35,'— penalize gate EXISTENCE (L0), not magnitude (L1)',size=12,italic=True,color=GRAY)
-foot(s,'~30 arms across grids x20 (prior-on), x20po (prior-off), x20arch, x20R (objective), x20frz (frozen), + synthetic.')
+table(s,0.4,1.0,12.55,rows,[2.55,7.1,2.9],fs=11.5,hfs=12)
+box(s,0.4,4.8,12.55,2.05,fill=RGBColor(0xF3,0xF6,0xFC),line=BLUE)
+label(s,0.6,4.88,12,'The runs  (recipe -> name)',color=DARKBLUE,size=15)
+bullets(s,0.6,5.3,12.3,1.5,[
+ 'Base arms (grid x20po):  min_esm = Fix1 only  .  sparse_esm = +Fix2 gate  .  sparse_con = +InfoNCE contrastive  .  '
+ 'sparse_resid = +drift-removed target  .  sparse_pertonly = +down-weighted recon  .  sparse_residrecon = +residual recon  .  sparse_all = all',
+ 'Objective sweep (grid x20R, on sparse_con base):  R1 per-example  .  R2 pseudobulk  .  R3 project-out  .  '
+ 'R4 pseudobulk+project  .  R5 = R4 + contrastive x10  .  R6 = R4 + energy/MMD',
+ 'Architecture (x20arch / x20frz):  staged_esm, staged_con (staged L0)  .  whiten  .  nonlinSCM  .  frozenD64 (+nonlin / +whiten)   '
+ '.   In flight: J1/J2 (hard self-gate), JN0/JN1 (Joung+Norman)'],size=11.5,color=BLACK,spacing=5)
+foot(s,'Grids: x20po (prior-off base) . x20R (objective) . x20arch/x20frz (architecture) . synthetic (identifiability). Prior-ON x20 kept only as the GRN memorization control.')
 
 # ═══ 5 · Metrics & methodology ═══
 s=slide_blank(); title_bar(s,'5 · Metrics & methodology (one eval script for every arm)')

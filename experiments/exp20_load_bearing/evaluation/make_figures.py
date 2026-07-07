@@ -56,20 +56,20 @@ def fig1():
           'struct_sparse_residrecon_po': 'sparse_residrecon'}
     for t, lab in po.items():
         d = disc(t)
-        if d: rows.append((lab, d['discrimination_cos_resid'], 'prior-off'))
+        if d: rows.append((lab, d['discrimination_cos_resid'], 'base arms (Fix1+Fix2±recon)'))
     for t, lab in [('staged_con_s26', 'staged_con'), ('staged_esm_s26', 'staged_esm26'),
                    ('staged_esm_s36', 'staged_esm36'), ('staged_nonlinSCM_s26', 'nonlinSCM'),
                    ('R2_pseudobulk', 'R2·pseudobulk'), ('R4_pseudobulk_projectout', 'R4·pbk+proj'),
-                   ('R6_R4_energy', 'R6·+energy'), ('whiten', 'whiten')]:
+                   ('R6_R4_energy', 'R6·+energy'), ('struct_whiten', 'whiten')]:
         d = disc(t)
-        if d: rows.append((lab, d['discrimination_cos_resid'], 'objective sweep'))
+        if d: rows.append((lab, d['discrimination_cos_resid'], 'objective / arch sweep'))
     for t, lab in [('struct_frozenD64', 'frozenD'), ('frozenD64_nonlin', 'frozenD+nonlin'),
                    ('staged_frozenD64_s26', 'frozenD+staged')]:
         d = disc(t)
         if d: rows.append((lab, d['discrimination_cos_resid'], 'frozen decoder'))
     rows.sort(key=lambda r: r[1])
     labs = [r[0] for r in rows]; vals = [r[1] for r in rows]
-    cmap = {'prior-off': BLUE, 'objective sweep': ORA, 'frozen decoder': VIO}
+    cmap = {'base arms (Fix1+Fix2±recon)': BLUE, 'objective / arch sweep': ORA, 'frozen decoder': VIO}
     cols = [cmap[r[2]] for r in rows]
     fig, ax = plt.subplots(figsize=(8.4, 7.2))
     y = np.arange(len(rows))
@@ -79,11 +79,11 @@ def fig1():
     ax.axvline(0.5, color=CRIT, ls='--', lw=1.6, zorder=2)
     ax.text(0.5, len(rows) - 0.2, ' chance 0.50', color=CRIT, fontsize=8.5, va='top')
     ax.axvline(0.647, color=GOOD, ls='--', lw=1.6, zorder=2)
-    ax.text(0.647, len(rows) - 1.4, ' exp19 ceiling 0.647', color='#006300', fontsize=8.5, va='top')
+    ax.text(0.647, len(rows) - 1.4, ' exp19 best 0.647 (ref)', color='#006300', fontsize=8.5, va='top')
     ax.set_yticks(y); ax.set_yticklabels(labs, fontsize=8.5, color=INK)
     ax.set_xlim(0.48, 0.68); ax.grid(axis='y', visible=False)
     style(ax, xlabel='held-out drift-removed discrimination (disc_resid, chance 0.5)',
-          title='1 · Perturbation prediction — no fix beats the prior-off ceiling')
+          title='1 · Perturbation prediction (all PRIOR-OFF) — no fix beats the baseline')
     ax.legend(handles=[Patch(fc=cmap[k], label=k) for k in cmap], loc='lower right',
               frameon=False, fontsize=8.5)
     fig.text(0.01, 0.005, 'Zero-shot held-out TFs. Best = prior-off sparse_con 0.639 ≈ exp19 epsmix 0.647; '
@@ -133,9 +133,9 @@ def fig2():
 # ============ FIG 3 — mechanism: decoder absorbs the operator; shift = magnitude not identity ==
 def fig3():
     arms = ['min_esm', 'sparse_esm', 'sparse_con', 'sparse_pertonly']
-    probe_A = [0.014, 0.007, 0.156, 0.459]
-    probe_D = [1.007, 1.007, 0.984, 0.985]
-    crossTF = [0.001, 0.000, 0.018, 0.018]
+    probe_A = [0.007, 0.034, 0.145, 0.119]      # prior-OFF
+    probe_D = [1.006, 1.006, 0.986, 0.987]
+    crossTF = [0.002, 0.000, 0.016, 0.017]
     fig, ax = plt.subplots(figsize=(8.6, 4.6))
     x = np.arange(len(arms)); w = 0.26
     b1 = ax.bar(x - w, probe_D, w, color=BLUE, edgecolor=SURF, lw=1, zorder=3, label='probe_Dperm (shuffle decoder)')
@@ -147,7 +147,7 @@ def fig3():
     ax.set_xticks(x); ax.set_xticklabels(arms, fontsize=9, color=INK)
     ax.set_ylim(0, 1.15); ax.grid(axis='x', visible=False); ax.grid(axis='y', color=GRID, lw=0.6)
     style(ax, ylabel='1 − cos(Δ, Δ_ablated)   /   diversity',
-          title='3 · Mechanism — the decoder carries prediction; A is a minor add-on; predictions collapse')
+          title='3 · Mechanism (prior-OFF) — decoder carries prediction; A minor; predictions collapse')
     ax.legend(frameon=False, fontsize=8.5, loc='upper center', ncol=1)
     fig.text(0.01, 0.005, 'probe_Dperm≈1.0 (shuffling D destroys the output) ≫ probe_A (0.0–0.5). crossTF_div≈0.02 ⇒ ~99% identical predictions across TFs (mode collapse → chance discrimination).',
              color=MUT, fontsize=7.3)
@@ -157,22 +157,22 @@ def fig3():
 
 # ============ FIG 4 — biology: the GRN is prior memorization, not causal recovery ============
 def fig4():
-    cats = ['CollecTRI\nprior-ON', 'CollecTRI\nprior-off', 'shuffled-A\nprior-off',
-            'corr-GRN\nbaseline', 'fate-hierarchy\nprior-off', 'random-D']
-    vals = [0.976, 0.569, 0.569, 0.568, 0.508, 0.49]
-    cols = [WARN, BLUE, BASE, MUT, AQUA, BASE]
+    cats = ['CollecTRI', 'shuffled-A', 'DoRothEA-held', 'corr-GRN\nbaseline', 'fate-hierarchy', 'random-D']
+    vals = [0.561, 0.562, 0.646, 0.568, 0.504, 0.495]
+    cols = [BLUE, BASE, AQUA, MUT, VIO, BASE]
     fig, ax = plt.subplots(figsize=(8.6, 4.6))
     x = np.arange(len(cats))
     ax.bar(x, vals, color=cols, width=0.62, edgecolor=SURF, lw=1.2, zorder=3)
     for xi, v in zip(x, vals):
         ax.text(xi, v + 0.008, f'{v:.2f}', ha='center', color=SEC, fontsize=9, fontweight='bold')
-    ax.axhline(0.5, color=CRIT, ls='--', lw=1.5, zorder=2); ax.text(len(cats) - 0.5, 0.51, 'chance', color=CRIT, fontsize=8, ha='right')
-    ax.axhline(0.568, color=MUT, ls=':', lw=1.3, zorder=2); ax.text(0.0, 0.578, 'co-expression floor', color=MUT, fontsize=8)
+    ax.axhline(0.976, color=WARN, ls='--', lw=1.6, zorder=2); ax.text(len(cats)-0.5, 0.965, 'prior-ON CollecTRI 0.98 = MEMORIZED (ref)', color='#9a6b00', fontsize=8.5, ha='right', va='top')
+    ax.axhline(0.568, color=MUT, ls=':', lw=1.3, zorder=2); ax.text(0.0, 0.575, 'co-expression floor 0.57', color=MUT, fontsize=8)
+    ax.axhline(0.5, color=CRIT, ls='--', lw=1.5, zorder=2); ax.text(len(cats)-0.5, 0.492, 'chance', color=CRIT, fontsize=8, ha='right', va='top')
     ax.set_xticks(x); ax.set_xticklabels(cats, fontsize=8.3, color=INK)
     ax.set_ylim(0.45, 1.02); ax.grid(axis='x', visible=False); ax.grid(axis='y', color=GRID, lw=0.6)
-    style(ax, ylabel='GRN vs prior AUROC', title='4 · Biology — the projected GRN is prior memorization, not discovery')
-    fig.text(0.01, 0.005, 'Prior-ON 0.98 collapses to the 0.57 co-expression floor when the prior is off; shuffling A doesn’t change it (lives in the decoder). '
-             'The fetal-atlas fate hierarchy is at chance (0.51) — no developmental structure recovered.', color=MUT, fontsize=7.3)
+    style(ax, ylabel='GRN vs network AUROC (all PRIOR-OFF)', title='4 · Biology (prior-OFF) — GRN is co-expression, not causal')
+    fig.text(0.01, 0.005, 'With the prior OFF, every GRN metric sits at the co-expression floor (0.56) = shuffled-A: A carries nothing. '
+             'Fetal-atlas fate hierarchy at chance (0.50). The prior-ON 0.98 (dashed) was pure memorization.', color=MUT, fontsize=7.3)
     fig.tight_layout(rect=(0, 0.03, 1, 1)); fig.savefig(f'{OUT}/fig4_biology_grn.png', dpi=150)
     plt.close(fig); print('fig4')
 
