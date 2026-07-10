@@ -1042,12 +1042,19 @@ def compute_total_loss(
     total = total + lambda_ortho * l_ortho
 
     if dag_active:
-        # DAGMA constraint
-        h_val = model.dag.dagma_constraint(A)
-        l_dag = dagma_augmented_lagrangian(h_val, lambda_dagma, rho_dagma)
-        losses['dag'] = h_val
-        losses['dag_lagrangian'] = l_dag
-        total = total + l_dag
+        # DAGMA acyclicity — only computed when actually penalized. With rho=lambda=0 (spectral
+        # penalty only, no acyclicity) we SKIP it entirely: computing it is not just wasted work,
+        # its backward would poison the graph even at zero weight (0 * NaN_grad = NaN) — the
+        # eigh/large-d instability that killed the latent-256 runs.
+        if lambda_dagma > 0 or rho_dagma > 0:
+            h_val = model.dag.dagma_constraint(A)
+            l_dag = dagma_augmented_lagrangian(h_val, lambda_dagma, rho_dagma)
+            losses['dag'] = h_val
+            losses['dag_lagrangian'] = l_dag
+            total = total + l_dag
+        else:
+            losses['dag'] = torch.zeros((), device=total.device)
+            losses['dag_lagrangian'] = torch.zeros((), device=total.device)
 
         # Sparsity (mode: 'product' = legacy L1 on sampled gates*weights;
         # 'gates' = L1 on deterministic edge probabilities sigmoid(θ/τ))

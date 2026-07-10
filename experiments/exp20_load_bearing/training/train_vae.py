@@ -183,6 +183,8 @@ def train_vae(config, data_dict=None, device=None):
                 load_combos=bool(config['data'].get('load_combos', False)),
                 combo_proc_path=config['data'].get('joung_combo_proc_path'),
                 min_combo_cells=int(config['data'].get('min_combo_cells', 20)),
+                gene_vocab=config['data'].get('gene_vocab'),          # vocab-v2 gene list (path/None)
+                effective_tfs=config['data'].get('effective_tfs'),   # drop inert TFs (path/None)
             )
         elif dataset_name == 'joung_norman':
             from data.load_joung_norman import load_joung_norman
@@ -193,6 +195,9 @@ def train_vae(config, data_dict=None, device=None):
                 val_frac=config['data'].get('single_pert_val_frac', 0.1),
                 split_seed=config['data'].get('split_seed', 42),
                 min_cells_per_pert=config['data'].get('min_cells_per_pert', 5),
+                gene_vocab=config['data'].get('gene_vocab'),
+                effective_tfs=config['data'].get('effective_tfs'),
+                joung_proc_path=config['data'].get('joung_proc_path'),
             )
         elif dataset_name == 'combined':
             from data.load_combined import load_combined
@@ -289,16 +294,66 @@ def train_vae(config, data_dict=None, device=None):
     # "differentiation" program). Training on the drift-removed residual (pert_residual
     # _target) focuses the shift encoder on the TF-SPECIFIC effect — feature_probe.py
     # showed the generalizable held-out signal lives entirely in this residual.
-    _de = data_dict.get('de_single', {})
-    _drift_genes = [g for g in (train_genes or _de.keys()) if g in _de]
+    # de_single lives in the return dict for single-context loaders but only in adata.uns for
+    # load_joung_norman — fall back so drift/pseudobulk work in BOTH.
+    _de = data_dict.get('de_single') or (data_dict['adata'].uns.get('de_single', {}))
+    # NAMESPACE-AWARE: multi-context (load_joung_norman) namespaces de_single keys as GENE__joung /
+    # GENE__norman while pert_split holds PLAIN gene names. Match on the base gene so drift/residual/
+    # pseudobulk targets aren't silently None/zero on JN arms (the JN_R4 shift-collapse bug).
+    _train_base = set(train_genes) if train_genes else None
+    _drift_genes = [k for k in _de if (_train_base is None or str(k).split('__')[0] in _train_base)]
     delta_drift_np = (np.mean([np.asarray(_de[g], np.float32) for g in _drift_genes], axis=0)
                       if _drift_genes else None)
     if delta_drift_np is not None:
         print(f"Δ-drift computed over {len(_drift_genes)} train TFs "
               f"(||drift||={np.linalg.norm(delta_drift_np):.3f}); "
               f"residual_target={config['phase1'].get('pert_residual_target', False)}")
+    elif config['phase1'].get('pert_residual_target') or config['phase1'].get('pert_project_shared'):
+        raise RuntimeError("pert_residual_target/project_shared requested but drift is None "
+                           "(no de_single keys matched train genes — check namespacing).")
     delta_drift_t = (torch.tensor(delta_drift_np, dtype=torch.float32, device=device)
                      if delta_drift_np is not None else None)
+
+    # ── In-training train_disc_resid probe (logged to wandb) ──────────────────────────────────
+    # Cheap do-op on a FIXED subset of TRAIN TFs each log step: measures whether the model is
+    # actually LEARNING the TF-specific (drift-removed) signal on SEEN TFs — i.e. whether it can
+    # overfit. Guarded (returns nan on any error), eval-mode, no grad, restores train mode.
+    _g2i = {g: i for i, g in enumerate(gene_names)}
+    _probe_tfs = [g for g in (train_genes or []) if g in _de and g in _g2i][:32]
+    _probe_obs = np.stack([np.asarray(_de[g], np.float32) for g in _probe_tfs]) if _probe_tfs else None
+    _probe_xctrl = (torch.tensor(X[np.asarray(control_idx)[:256]], dtype=torch.float32, device=device)
+                    if _probe_tfs else None)
+    _probe_beta = float(config['phase1'].get('pert_mutilate_beta', 1.0))
+    _probe_struct = config['model'].get('pert_intervene_mode', 'legacy') == 'structural'
+
+    def _train_disc_probe():
+        if not _probe_tfs or delta_drift_np is None:
+            return float('nan')
+        try:
+            was_tr = model.training; model.eval()
+            with torch.no_grad():
+                _, _, epsc = model.encoder(_probe_xctrl)
+                A_ = model.dag.sample_A(n_samples=1).squeeze(0)
+                pdec = getattr(model, 'pert_decoder', None) or model.decoder
+                ctrl_rec = pdec(model.dag.scm_forward(epsc, A_)).mean(0)
+                preds = []
+                for g in _probe_tfs:
+                    S = model.compute_shift(torch.tensor([_g2i[g]], device=device)).sum(0)
+                    u = model.refine_u((_probe_beta * S.abs()).clamp(max=1.0), S)
+                    eps_t = epsc + S.unsqueeze(0) if _probe_struct else epsc
+                    z_post = model.dag.scm_intervene_u(epsc, A_, eps_t, u)[0]
+                    preds.append((pdec(z_post).mean(0) - ctrl_rec).cpu().numpy())
+            if was_tr:
+                model.train()
+            P = np.stack(preds) - delta_drift_np; O = _probe_obs - delta_drift_np
+            def _zr(M):
+                M = M - M.mean(1, keepdims=True); return M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
+            C = _zr(P) @ _zr(O).T; dg = np.diag(C)[:, None]; T = len(P)
+            return float(((dg > C).sum(1) / (T - 1)).mean())    # train disc_resid, chance 0.5
+        except Exception:
+            try: model.train()
+            except Exception: pass
+            return float('nan')
 
     # exp20 Phase-2 mode-collapse fix: per-gene std of the drift-removed target Δ over train TFs.
     # Whitening the MSE by this makes the loss reward getting the residual DIRECTION right rather
@@ -310,10 +365,16 @@ def train_vae(config, data_dict=None, device=None):
         pb = np.zeros((n_genes, n_genes), np.float32); n_ok = 0
         for i, gname in enumerate(gene_names):
             dv = _de.get(gname)
+            if dv is None:                         # multi-context: namespaced de_single keys
+                cands = [_de[k] for k in (f'{gname}__joung', f'{gname}__norman') if k in _de]
+                dv = np.mean(cands, axis=0) if cands else None
             if dv is not None:
                 pb[i] = np.asarray(dv, np.float32); n_ok += 1
         pseudobulk_t = torch.tensor(pb, dtype=torch.float32, device=device)
         print(f"pseudobulk target: per-TF population-mean Δ for {n_ok}/{n_genes} genes")
+        if n_ok == 0:
+            raise RuntimeError("pert_pseudobulk_target requested but 0 genes matched de_single "
+                               "(namespacing bug) — target would be identically zero.")
 
     pert_whiten_t = None
     if bool(config['phase1'].get('pert_whiten_target', False)) and _drift_genes and delta_drift_np is not None:
@@ -354,27 +415,64 @@ def train_vae(config, data_dict=None, device=None):
     # OVERRIDDEN to the built width and written back to config so the eval loader rebuilds it.
     frozen_decoder_weight = None
     if m.get('decoder_type') == 'frozen_go':
-        from utils.bio_priors import build_go_bp_mask
-        Mgo, _terms = build_go_bp_mask(
-            gene_names, max_term_size=int(m.get('frozen_go_max_term', 30)),
-            min_genes_in_axis=int(m.get('frozen_go_min_genes', 5)),
-            max_overlap=float(m.get('frozen_go_max_overlap', 0.5)),
-            leak=0.0, max_pathways=int(m.get('frozen_go_max_pathways', 192)), verbose=True)
-        Mgo = torch.as_tensor(Mgo, dtype=torch.float32)                         # [G, Kgo]
+        # optional GO:BP columns (interpretable but capture only ~3% of TF-residual energy)
+        max_pw = int(m.get('frozen_go_max_pathways', 192))
+        if max_pw > 0:
+            from utils.bio_priors import build_go_bp_mask
+            Mgo, _terms = build_go_bp_mask(
+                gene_names, max_term_size=int(m.get('frozen_go_max_term', 30)),
+                min_genes_in_axis=int(m.get('frozen_go_min_genes', 5)),
+                max_overlap=float(m.get('frozen_go_max_overlap', 0.5)),
+                leak=0.0, max_pathways=max_pw, verbose=True)
+            Mgo = torch.as_tensor(Mgo, dtype=torch.float32)                     # [G, Kgo]
+        else:
+            Mgo = torch.zeros(n_genes, 0, dtype=torch.float32)
         npca = int(m.get('frozen_go_n_pca', 64))
-        rsel = np.random.default_rng(0).choice(X.shape[0], min(20000, X.shape[0]), replace=False)
-        Xs = X[rsel]
-        Xs = (Xs.toarray() if hasattr(Xs, 'toarray') else np.asarray(Xs)).astype(np.float32)
-        Xs = Xs - Xs.mean(0, keepdims=True)
-        _, _, Vt = np.linalg.svd(Xs, full_matrices=False)
+        # PCA source: 'expression' (default) or 'residual'. The residual basis spans the
+        # drift-removed per-TF signal (44% at 64 dims vs 3.4% for GO / 24% for expr-PCA),
+        # so a fixed decoder built from it can actually discriminate TFs and force A to route it.
+        pca_source = m.get('frozen_go_pca_source', 'expression')
+        if pca_source == 'residual' and delta_drift_np is not None and train_genes:
+            Rmat = np.stack([np.asarray(_de[g], np.float32) - delta_drift_np
+                             for g in train_genes if g in _de])                 # [T, G] residuals
+            Rc = Rmat - Rmat.mean(0, keepdims=True)
+            _, _, Vt = np.linalg.svd(Rc, full_matrices=False)
+            print(f"[frozen_go] PCA source = RESIDUAL ({Rmat.shape[0]} train TFs, drift-removed)")
+        else:
+            rsel = np.random.default_rng(0).choice(X.shape[0], min(20000, X.shape[0]), replace=False)
+            Xs = X[rsel]
+            Xs = (Xs.toarray() if hasattr(Xs, 'toarray') else np.asarray(Xs)).astype(np.float32)
+            Xs = Xs - Xs.mean(0, keepdims=True)
+            _, _, Vt = np.linalg.svd(Xs, full_matrices=False)
         Dpca = torch.as_tensor(Vt[:npca].T.copy(), dtype=torch.float32)         # [G, npca]
-        Dfz = torch.cat([Mgo, Dpca], dim=1)
+        Dfz = torch.cat([Mgo, Dpca], dim=1) if Mgo.shape[1] > 0 else Dpca
         Dfz = Dfz / (Dfz.norm(dim=0, keepdim=True) + 1e-8)                      # unit columns
         frozen_decoder_weight = Dfz
         config['model']['latent_dim'] = int(Dfz.shape[1])
         m = config['model']
-        print(f"[frozen_go] decoder D = [GO {Mgo.shape[1]} | PCA {npca}] frozen → "
-              f"latent_dim={Dfz.shape[1]} (covers {(Mgo.sum(1) > 0).sum()}/{n_genes} genes via GO)")
+        print(f"[frozen_go] decoder D = [GO {Mgo.shape[1]} | {pca_source}-PCA {npca}] frozen → "
+              f"latent_dim={Dfz.shape[1]}")
+
+    # ── Optional SENA-δ MASKED-LEARNABLE decoder (exp20) ─────────────────────────────
+    # Each latent = a GO:BP pathway; decoder weight is LEARNABLE but every use is D⊙mask with
+    # mask = M + λ(1−M) (λ = dec_mask_lambda). Middle ground between free (absorbs A) and frozen
+    # (capacity floor): keeps reconstruction capacity, λ-suppresses off-pathway gene wiring so
+    # covariance routes through pathway latents + A. latent_dim OVERRIDDEN to #pathways.
+    decoder_mask_np = None
+    if m.get('decoder_type') == 'masked_go':
+        from utils.bio_priors import build_go_bp_mask
+        lam = float(m.get('dec_mask_lambda', 0.1))
+        M, terms = build_go_bp_mask(
+            gene_names, max_term_size=int(m.get('masked_go_max_term', 30)),
+            min_genes_in_axis=int(m.get('masked_go_min_genes', 5)),
+            max_overlap=float(m.get('masked_go_max_overlap', 0.5)),
+            leak=lam, max_pathways=m.get('masked_go_max_pathways', None), verbose=True)
+        decoder_mask_np = np.asarray(M, dtype=np.float32)                       # [G, K], 1 in-set / λ off
+        config['model']['latent_dim'] = int(decoder_mask_np.shape[1])          # keep decoder_type='masked_go'
+        m = config['model']                                                    # (CausalVAE builds LinearDecoder)
+        cov = float((decoder_mask_np.max(1) > lam).mean())
+        print(f"[masked_go] SENA mask: {decoder_mask_np.shape[1]} pathways, λ={lam}, "
+              f"gene coverage {100*cov:.0f}% → latent_dim={decoder_mask_np.shape[1]} (masked-learnable)")
 
     model = CausalVAE(
         n_genes=n_genes,
@@ -414,6 +512,8 @@ def train_vae(config, data_dict=None, device=None):
         scm_nonlinear=bool(m.get('scm_nonlinear', False)),
         n_picard=int(m.get("scm_picard_iters", 40)),
         scm_solve_ridge=float(m.get("scm_solve_ridge", 0.0)),
+        decoder_mask=(torch.as_tensor(decoder_mask_np) if decoder_mask_np is not None else None),
+        decoder_mask_freeze=bool(m.get('dec_mask_freeze', False)),
     ).to(device)
 
     print(f"Model: CausalVAE(n_genes={n_genes}, latent_dim={m['latent_dim']}, "
@@ -437,6 +537,23 @@ def train_vae(config, data_dict=None, device=None):
                              f"{model.pert_label.shape[1]} — set model.shift_label_dim accordingly")
         model.set_pert_labels(torch.as_tensor(desc, dtype=torch.float32))
         print(f"Shift encoder: descriptor='{descriptor}' shape {tuple(model.pert_label.shape)}")
+
+    # ── Retrieval augmentation: build the TRAIN-ONLY memory (leakage-safe) ──────────────────────
+    # DB rows = train-split TFs only; keys = their ESM descriptor; values init = D†·(train residual).
+    # Query self-masked to its own row; val/test TFs never inserted. See CausalVAE.install_retrieval.
+    if bool(config['phase1'].get('retrieval', False)) and train_genes and delta_drift_np is not None:
+        tr_g = [g for g in train_genes if g in _de and g in _g2i]
+        tr_idx = [_g2i[g] for g in tr_g]
+        resid = np.stack([np.asarray(_de[g], np.float32) - delta_drift_np for g in tr_g])   # [N_tr, n_genes]
+        with torch.no_grad():
+            D = model.decoder.effective_D().detach().float().cpu().numpy()   # [n_genes, d]
+            val_init = (resid @ np.linalg.pinv(D).T).astype(np.float32)       # D†·residual -> [N_tr, d]
+        model.install_retrieval(tr_idx, val_init,
+                                key_dim=int(config['phase1'].get('retrieval_key_dim', 128)),
+                                k=int(config['phase1'].get('retrieval_k', 10)),
+                                tau=float(config['phase1'].get('retrieval_tau', 1.0)))
+        print(f"[retrieval] train-only memory: {len(tr_idx)} TFs | k={config['phase1'].get('retrieval_k', 10)} "
+              f"| val_init=D†·residual | self-masked, leakage-safe")
 
     # ── Fate labels for the identifiability regularizer (Joung NNLS annotation) ──
     # Per-gene integer fate id (Cao-mouse developmental fate), aligned to gene_names;
@@ -634,7 +751,7 @@ def train_vae(config, data_dict=None, device=None):
         # effects then must flow through A. Oracle-free (from D), replaces the learned gate.
         if p1.get('pert_hard_self_gate', False) and epoch == dag_start_epoch:
             with torch.no_grad():
-                Dabs = model.decoder.D.detach().abs()                       # [n_genes, d]
+                Dabs = model.decoder.effective_D().detach().abs()           # [n_genes, d] (masked if masked_go)
                 kk = int(p1.get('hard_self_gate_topk', 4))
                 idx = Dabs.topk(kk, dim=1).indices
                 M = torch.zeros_like(Dabs); M.scatter_(1, idx, 1.0)
@@ -945,7 +1062,7 @@ def train_vae(config, data_dict=None, device=None):
             plateau_scheduler.step(epoch_losses['total'])
 
         # DAGMA Lagrangian update every 20 epochs
-        if dag_active and epoch % 20 == 0:
+        if dag_active and epoch % 20 == 0 and rho_dagma > 0:   # skip entirely when acyclicity is off
             with torch.no_grad():
                 A_eval = model.dag.get_edge_probs()
                 h_val = model.dag.dagma_constraint(A_eval).item()
@@ -1034,6 +1151,10 @@ def train_vae(config, data_dict=None, device=None):
                 'train/beta': beta,
                 'train/lr': optimizer.param_groups[0]['lr'],
             }
+            # train_disc_resid: how well the model fits the TF-specific signal on SEEN TFs (overfit
+            # signal). Every 5 epochs (cheap do-op on a fixed 32-TF subset). chance 0.5.
+            if epoch % 5 == 0 or epoch == int(config['phase1']['n_epochs']):
+                log_dict['train/train_disc_resid'] = _train_disc_probe()
             # Per-module gradient norms — captured in the step block BEFORE
             # optimizer.zero_grad() (reading p.grad here would always be None/0,
             # since the epoch's final step zeroes grads before this block runs).

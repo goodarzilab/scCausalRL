@@ -31,20 +31,39 @@ def _de(Xa, pert_idx, ctrl_mean):
 
 
 def load_joung_norman(norman_path='/large_storage/goodarzilab/shervin/CausalBioRL/Norman/',
-                      train_frac=0.8, val_frac=0.1, split_seed=42, min_cells_per_pert=5):
-    from data.load_joung import load_joung
+                      train_frac=0.8, val_frac=0.1, split_seed=42, min_cells_per_pert=5,
+                      gene_vocab=None, effective_tfs=None, joung_proc_path=None):
+    from data.load_joung import load_joung, _read_gene_list
     from data.load_norman_aligned import load_norman_aligned
 
     print("[jn] loading Joung (full gene axis)...")
-    J = load_joung(n_hvg=None, min_cells_per_pert=min_cells_per_pert)
+    # joung_proc_path selects the Joung proc file (e.g. the vocab-v2 proc = shared axis directly).
+    # gene_vocab subsets that axis; effective_tfs filters Joung's pert vocab here and Norman's below.
+    _pp = {} if joung_proc_path is None else {'proc_path': joung_proc_path}
+    J = load_joung(n_hvg=None, min_cells_per_pert=min_cells_per_pert,
+                   gene_vocab=gene_vocab, effective_tfs=effective_tfs, **_pp)
     genes = [str(g) for g in J['gene_names']]; G = len(genes)
     Jx = J['adata'].X; Jx = Jx.toarray() if sp.issparse(Jx) else np.asarray(Jx)
     print(f"[jn] aligning Norman onto Joung's {G}-gene axis...")
     N = load_norman_aligned(norman_path, target_gene_names=genes, min_cells_per_pert=min_cells_per_pert)
     Nx = N['adata'].X; Nx = Nx.toarray() if sp.issparse(Nx) else np.asarray(Nx)
+    _eff = _read_gene_list(effective_tfs)
+    if _eff is not None:
+        nb = len(N['single_perts'])
+        N['single_perts'] = {g: idx for g, idx in N['single_perts'].items() if g in _eff}
+        print(f"[jn] effective_tfs: Norman kept {len(N['single_perts'])}/{nb} TFs")
 
     nJ, nN = Jx.shape[0], Nx.shape[0]
-    X = np.concatenate([Jx.astype(np.float32), Nx.astype(np.float32)], axis=0)
+    # de_single from Jx/Nx BEFORE concatenating (then free the duplicates to cap peak RAM)
+    Jc = Jx[J['control_idx']].mean(0).astype(np.float32)
+    Nc = Nx[N['control_idx']].mean(0).astype(np.float32)
+    de_single = {}
+    for g, idx in J['single_perts'].items():
+        de_single[f'{g}__joung'] = (Jx[np.asarray(idx)].mean(0) - Jc).astype(np.float32)
+    for g, idx in N['single_perts'].items():
+        de_single[f'{g}__norman'] = (Nx[np.asarray(idx)].mean(0) - Nc).astype(np.float32)
+    X = np.concatenate([Jx.astype(np.float32, copy=False), Nx.astype(np.float32, copy=False)], axis=0)
+    del Jx, Nx, J['adata'], N['adata']; import gc; gc.collect()   # free ~50GB of duplicates
     modality = np.concatenate([np.full(nJ, MOD_JOUNG), np.full(nN, MOD_NORMAN)]).astype(np.int64)
     is_ctrl = np.zeros(nJ + nN, bool)
     for i in J['control_idx']:
@@ -68,16 +87,7 @@ def load_joung_norman(norman_path='/large_storage/goodarzilab/shervin/CausalBioR
     for k, idx in (N.get('combo_perts') or {}).items():
         combo_perts[k] = [nJ + i for i in idx]
     control_idx = list(np.where(is_ctrl)[0])
-
-    # per-namespaced-key de_single on the shared axis (within-context controls)
-    Jc = Jx[J['control_idx']]; Jc = (Jc.toarray() if sp.issparse(Jc) else np.asarray(Jc)).mean(0)
-    Nc = Nx[N['control_idx']]; Nc = (Nc.toarray() if sp.issparse(Nc) else np.asarray(Nc)).mean(0)
-    de_single = {}
-    for g, idx in J['single_perts'].items():
-        de_single[f'{g}__joung'] = _de(Jx, idx, Jc)
-    for g, idx in N['single_perts'].items():
-        de_single[f'{g}__norman'] = _de(Nx, idx, Nc)
-    adata.uns['de_single'] = de_single
+    adata.uns['de_single'] = de_single   # computed above, before the big arrays were freed
 
     # shared gene-level split over the UNION of perturbed genes (un-namespaced)
     all_pert = {k.split('__')[0] for k in single_perts}
@@ -90,7 +100,8 @@ def load_joung_norman(norman_path='/large_storage/goodarzilab/shervin/CausalBioR
           f"{len(pert_split['train'])}/{len(pert_split['val'])}/{len(pert_split['test'])}")
     return {'adata': adata, 'control_idx': control_idx, 'single_perts': single_perts,
             'combo_perts': combo_perts, 'gene_names': genes, 'pert_genes': sorted(all_pert),
-            'pert_split': pert_split, 'shared_tfs': shared_tfs, 'n_modalities': 2, 'n_batches': 2}
+            'pert_split': pert_split, 'shared_tfs': shared_tfs, 'n_modalities': 2, 'n_batches': 2,
+            'de_single': de_single}
 
 
 if __name__ == '__main__':

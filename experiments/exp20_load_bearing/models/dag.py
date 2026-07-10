@@ -192,23 +192,31 @@ class DAGModule(nn.Module):
 
         def _dagma_single(A_):
             # A_ shape: [d, d]
-            M = torch.eye(d, device=A_.device, dtype=A_.dtype) + (s / d) * A_ * A_
-            # Matrix power to d: use repeated squaring for large d
+            AA = A_ * A_                                                   # Hadamard square, entrywise ≥ 0
             try:
-                # Use matrix_power for small d, eigendecomposition for large
                 if d <= 64:
-                    Md = torch.linalg.matrix_power(M, d)
+                    # NOTEARS-polynomial: tr((I + s/d·A∘A)^d) − d  (stable via matrix_power at small d)
+                    M = torch.eye(d, device=A_.device, dtype=A_.dtype) + (s / d) * AA
+                    h = torch.trace(torch.linalg.matrix_power(M, d)) - d
                 else:
-                    # Eigendecomposition approach
-                    eigvals, eigvecs = torch.linalg.eigh(M)
-                    # Clamp negative eigenvalues (numerical issues)
-                    eigvals = eigvals.clamp(min=1e-8)
-                    eigvals_pow = eigvals ** d
-                    Md = eigvecs @ torch.diag(eigvals_pow) @ eigvecs.T
-                h = torch.trace(Md) - d
+                    # log-det DAGMA (Bello 2022): h = −logdet(s·I − A∘A) + d·log s. Gradient is
+                    # (s·I − A∘A)^{-1} via slogdet — NO eigendecomposition, so it is stable at d=256
+                    # where eigvals**d overflows AND eigh's backward NaNs on degenerate eigenvalues.
+                    # Choose s_eff > ρ(A∘A) so (s_eff·I − A∘A) is invertible (positive-definite region).
+                    with torch.no_grad():
+                        v = torch.ones(d, 1, device=A_.device, dtype=A_.dtype) / (d ** 0.5)
+                        for _ in range(20):                               # Perron eigenvector of nonneg A∘A
+                            v = AA @ v; v = v / (v.norm() + 1e-8)
+                        rho = (v.transpose(-1, -2) @ AA @ v).abs().squeeze()
+                    s_eff = rho * 1.5 + 1.0                               # PD margin ⇒ well-posed logdet
+                    M = s_eff * torch.eye(d, device=A_.device, dtype=A_.dtype) - AA
+                    _, logabsdet = torch.linalg.slogdet(M)
+                    h = -logabsdet + d * torch.log(s_eff)
+                if not torch.isfinite(h):
+                    h = AA.sum()
             except Exception:
                 # Fallback: simple trace formula approximation
-                h = torch.sum(A_ * A_)
+                h = AA.sum()
             return h
 
         if A.dim() == 2:

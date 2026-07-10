@@ -34,7 +34,7 @@ class CausalVAE(nn.Module):
                  pert_intervene_mode='legacy', use_target_gate=False,
                  target_gate_tau=1.0, target_gate_bias_init=3.0,
                  frozen_decoder_weight=None, scm_nonlinear=False, n_picard=40,
-                 scm_solve_ridge=0.0):
+                 scm_solve_ridge=0.0, decoder_mask=None, decoder_mask_freeze=False):
         super().__init__()
         # exp20 load-bearing-A fixes:
         #  pert_intervene_mode='structural' → single mutilated solve z_post=(I−diag(1−u)Aᵀ)⁻¹(ε+S),
@@ -104,6 +104,16 @@ class CausalVAE(nn.Module):
                 with torch.no_grad():
                     self.pert_decoder.D.copy_(frozen_decoder_weight.to(self.pert_decoder.D.dtype))
                 self.pert_decoder.D.requires_grad_(False)
+
+        # exp20 SENA-δ MASKED-LEARNABLE decoder: D stays learnable but every use is D⊙mask, where
+        # mask = M + λ(1−M) (1 on annotated gene-pathway pairs, λ off). Unlike the frozen decoder it
+        # keeps reconstruction capacity, but off-pathway gene-gene wiring is λ-suppressed so covariance
+        # must route through the pathway latents + A. Each latent coordinate is a GO:BP pathway.
+        if decoder_mask is not None and getattr(self.decoder, 'is_linear', False):
+            dm = decoder_mask if torch.is_tensor(decoder_mask) else torch.as_tensor(decoder_mask)
+            self.decoder.set_mask(dm, freeze=bool(decoder_mask_freeze))
+            if self.pert_decoder is not None and getattr(self.pert_decoder, 'is_linear', False):
+                self.pert_decoder.set_mask(dm, freeze=bool(decoder_mask_freeze))
 
         # ── Singles-trainable non-additivity for combo composition ───────────────────────
         # The ONLY non-additive channel under singles-only training that keeps the decoder
@@ -196,6 +206,10 @@ class CausalVAE(nn.Module):
         gi = torch.as_tensor(gene_idx, dtype=torch.long, device=self.pert_label.device)
         label = self.pert_label[gi]                       # [..., label_dim]
         shift = self.shift_encoder(label)                 # [..., d] raw magnitude head
+        # Retrieval augmentation: blend in an ESM-similarity-weighted shift retrieved from a TRAIN-only
+        # memory (self-excluded, top-k). Leakage-safe: DB = train TFs, query's own row masked.
+        if getattr(self, 'retr_val', None) is not None:
+            shift = shift + self.retr_alpha * self._retrieve(label, gi)
         # Fix 2: sparse per-TF target gate (ones when use_target_gate=False → identical to legacy).
         # Single choke point — every S-producer routes through compute_shift, so S is gated everywhere.
         gate = self.shift_encoder.sample_gate(label)      # [..., d] soft(train)/hard(eval)
@@ -206,6 +220,38 @@ class CausalVAE(nn.Module):
         if og is not None:
             gate = og[gi]
         return self.shift_scale * (gate * shift)
+
+    def install_retrieval(self, train_gene_idx, val_init, key_dim=128, k=10, tau=1.0):
+        """Install the TRAIN-only retrieval memory. train_gene_idx: LongTensor[N_tr] gene indices of
+        the train TFs (DB rows). val_init: [N_tr, d] latent value memory (init from D†·train residual).
+        Keys = pert_label of those genes (ESM). Leakage-safe: only train TFs, self-masked at query."""
+        import torch.nn as nn
+        d = self.latent_dim
+        self.register_buffer('retr_gene', torch.as_tensor(train_gene_idx, dtype=torch.long))
+        self.register_buffer('retr_key', self.pert_label[self.retr_gene].detach().clone())  # [N_tr, label_dim]
+        self.retr_val = nn.Parameter(torch.as_tensor(val_init, dtype=torch.float32))          # [N_tr, d]
+        self.retr_proj = nn.Linear(self.retr_key.shape[1], key_dim, bias=False)
+        self.retr_alpha = nn.Parameter(torch.tensor(0.5))
+        self.retr_k = int(k); self.retr_tau = float(tau)
+        self.to(self.retr_key.device)
+
+    def _retrieve(self, label, gi):
+        """ESM-similarity attention over the train memory, self-excluded + top-k. label[...,L], gi[...]
+        -> retrieved shift [..., d]."""
+        L = label.shape[-1]; d = self.latent_dim
+        q = self.retr_proj(label.reshape(-1, L))                       # [M, key_dim]
+        K = self.retr_proj(self.retr_key)                              # [N_tr, key_dim]
+        scores = (q @ K.t()) / (self.retr_proj.out_features ** 0.5 * self.retr_tau)  # [M, N_tr]
+        gflat = gi.reshape(-1)
+        # self-mask: a query TF cannot attend to its OWN train-DB row (no self-leakage)
+        selfmask = (gflat[:, None] == self.retr_gene[None, :])
+        scores = scores.masked_fill(selfmask, float('-inf'))
+        if self.retr_k < scores.shape[1]:                              # keep top-k neighbours only
+            kth = scores.topk(self.retr_k, dim=1).values[:, -1:]
+            scores = scores.masked_fill(scores < kth, float('-inf'))
+        attn = torch.softmax(scores, dim=1)                            # [M, N_tr]
+        retrieved = attn @ self.retr_val                               # [M, d]
+        return retrieved.reshape(*label.shape[:-1], d)
 
     def compute_gate_prob(self, gene_idx):
         """Expected open-gate probability per program (for the L0 target-sparsity penalty).
@@ -329,7 +375,7 @@ class CausalVAE(nn.Module):
         latent_idx[g] = argmax_i |D[g, i]|
         Returns: (mapping array [n_genes], alignment strengths [n_genes])
         """
-        D = self.decoder.D.detach()  # [n_genes, d]
+        D = self.decoder.effective_D().detach()  # [n_genes, d]
         D_abs = D.abs()
         latent_idx = D_abs.argmax(dim=1)  # [n_genes]
         strengths = D_abs.max(dim=1).values  # [n_genes]
@@ -338,7 +384,7 @@ class CausalVAE(nn.Module):
 
     def _get_latent_for_gene(self, gene_idx):
         """Get the most aligned latent index for a given gene index (legacy argmax)."""
-        D = self.decoder.D.detach()  # [n_genes, d]
+        D = self.decoder.effective_D().detach()  # [n_genes, d]
         latent_idx = D[gene_idx].abs().argmax().item()
         return latent_idx
 
@@ -351,7 +397,7 @@ class CausalVAE(nn.Module):
         dx: Tensor[n_genes]
         Returns: dz Tensor[d]
         """
-        D = self.decoder.D.detach()  # [n_genes, d]
+        D = self.decoder.effective_D().detach()  # [n_genes, d]
         d = self.latent_dim
         DtD = D.T @ D + 1e-6 * torch.eye(d, device=D.device)  # [d, d]
         Dt_dx = D.T @ dx  # [d]
@@ -617,7 +663,7 @@ class CausalVAE(nn.Module):
         Returns: (L Tensor[n_genes, d], T Tensor[d])
         """
         with torch.no_grad():
-            D = self.decoder.D.detach()                          # [n_genes, d]
+            D = self.decoder.effective_D().detach()                          # [n_genes, d]
             D_sq = D * D                                         # [n_genes, d]
             T = D_sq.sum(dim=0) + eps                            # [d] — program-energy (diagnostics)
             row_max = D_sq.max(dim=1, keepdim=True).values + eps  # [n_genes, 1] — per-gene peak

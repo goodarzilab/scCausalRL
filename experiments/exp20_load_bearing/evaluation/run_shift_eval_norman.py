@@ -59,6 +59,11 @@ def load_shift_model(checkpoint_path, device):
     if encoder_type == 'sena':
         K = int(sd['encoder.W'].shape[1])
         sena_mask = torch.zeros(n_genes, K)
+    # SENA-δ masked-learnable decoder reload: detect the saved dec_mask buffer, hand a zero
+    # placeholder so the buffer is registered; load_state_dict restores the real mask + weights.
+    decoder_mask = None
+    if 'decoder.dec_mask' in sd:
+        decoder_mask = torch.zeros(n_genes, int(sd['decoder.dec_mask'].shape[1]))
     model = CausalVAE(
         n_genes=n_genes, latent_dim=cfg_m['latent_dim'],
         tau_init=cfg_m.get('tau_min', cfg_m.get('tau_init', 1.0)),
@@ -90,7 +95,16 @@ def load_shift_model(checkpoint_path, device):
         scm_nonlinear=bool(cfg_m.get('scm_nonlinear', False)),
         n_picard=int(cfg_m.get("scm_picard_iters", 40)),
         scm_solve_ridge=float(cfg_m.get("scm_solve_ridge", 0.0)),
+        decoder_mask=decoder_mask,
+        decoder_mask_freeze=bool(cfg_m.get('dec_mask_freeze', False)),
     ).to(device)
+    # retrieval memory: register placeholders (train-only DB) sized from the state dict so load restores
+    if 'retr_val' in sd:
+        _p1 = (ckpt.get('config', {}) or {}).get('phase1', {}) or {}
+        N_tr, dv = sd['retr_val'].shape
+        model.install_retrieval(torch.zeros(N_tr, dtype=torch.long), torch.zeros(N_tr, dv),
+                                key_dim=int(sd['retr_proj.weight'].shape[0]),
+                                k=int(_p1.get('retrieval_k', 10)), tau=float(_p1.get('retrieval_tau', 1.0)))
     model.load_state_dict(sd)
     if ckpt.get('oracle_gate') is not None:                 # hard self-membership gate (localization arms)
         model.oracle_gate = torch.as_tensor(ckpt['oracle_gate'], dtype=torch.float32, device=device)

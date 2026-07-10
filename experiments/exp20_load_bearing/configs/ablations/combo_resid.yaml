@@ -1,0 +1,77 @@
+data:
+  dataset: joung
+  joung_proc_path: /home/sgoudarzi/scCausalRL/experiments/exp17_joung_tfatlas/data/joung_singles_proc.h5ad
+  n_hvg: 9923
+  split_seed: 42
+  single_pert_train_frac: 0.8
+  single_pert_val_frac: 0.1
+  min_cells_per_pert: 5
+model:
+  latent_dim: 64
+  tau_init: 1.0
+  tau_min: 0.25
+  n_dag_samples: 16
+  dagma_s: 1.0
+  decoder_type: linear
+  use_shift_encoder: true
+  shift_descriptor: esm
+  shift_label_dim: 100
+  shift_pca_dim: 50
+  shift_hidden: 1024
+  shift_n_layers: 1
+  shift_output_activation: none
+  shift_scale_init: 1.0
+  shift_pca_max_ctrl: 2000
+  shift_esm_dim: 100
+  u_gate_mlp: true
+  nonlinear_eps_mix: true
+  gate_hidden: 256
+phase1:
+  n_epochs: 60
+  batch_size: 256
+  lr: 0.001
+  beta_start: 0.01
+  beta_end: 0.5
+  beta_anneal_epochs: 30
+  lambda_pert: 10.0
+  lambda_sparse: 0.0
+  lambda_sparse_mode: product
+  lambda_spectral: 0.1
+  lambda_ortho: 1.0
+  lambda_D_sparse: 30.0
+  lambda_prior: 10.0
+  prior_margin: 0.5
+  dagma_rho_init: 0.0
+  dagma_rho_max: 0.0
+  dagma_lambda_init: 0.0
+  reconstruction_phase_epochs: 10
+  lr_warmup_epochs: 5
+  dag_warmin_epochs: 10
+  accumulation_steps: 4
+  pert_n_dag_samples: 1
+  cell_sentence_S: 64
+  n_sentences_per_block: 4
+  min_block_cells: 3
+  sentence_batch_size: 32
+  pert_mse_weight: 1.0
+  pert_mmd_weight: 0.0
+  pert_energy_weight: 0.0
+  pert_shift_l1: 0.0
+  pert_contrastive_weight: 1.0
+  pert_loss_mode: shift_mutilate
+  pert_mutilate_u_max: 0.5
+  pert_mutilate_beta: 1.0
+  pert_mutilate_u_mode: shift
+  recon_subsample: 150000
+  pert_residual_target: true
+  pert_contrastive_temp: 0.2
+intervention:
+  scheme: shift
+  u_clip_max: 0.5
+wandb:
+  enabled: true
+  project: CausalBioRL
+  entity: null
+  phase1_run_name: exp19_combo_resid
+eval:
+  n_dag_samples: 32
