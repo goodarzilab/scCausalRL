@@ -198,6 +198,9 @@ def train_vae(config, data_dict=None, device=None):
                 gene_vocab=config['data'].get('gene_vocab'),
                 effective_tfs=config['data'].get('effective_tfs'),
                 joung_proc_path=config['data'].get('joung_proc_path'),
+                load_combos=bool(config['data'].get('load_combos', False)),
+                joung_combo_proc_path=config['data'].get('joung_combo_proc_path'),
+                min_combo_cells=int(config['data'].get('min_combo_cells', 20)),
             )
         elif dataset_name == 'combined':
             from data.load_combined import load_combined
@@ -319,41 +322,67 @@ def train_vae(config, data_dict=None, device=None):
     # actually LEARNING the TF-specific (drift-removed) signal on SEEN TFs — i.e. whether it can
     # overfit. Guarded (returns nan on any error), eval-mode, no grad, restores train mode.
     _g2i = {g: i for i, g in enumerate(gene_names)}
-    _probe_tfs = [g for g in (train_genes or []) if g in _de and g in _g2i][:32]
-    _probe_obs = np.stack([np.asarray(_de[g], np.float32) for g in _probe_tfs]) if _probe_tfs else None
+    # NAMESPACE-AWARE (mirror drift/retrieval fixes): multi-context de_single keys are GENE__joung /
+    # GENE__norman while train_genes are plain — resolve base→de (prefer __joung) so the probe isn't
+    # silently empty → NaN on JN arms (the reported train_disc_resid=NaN bug).
+    _pde_by_base = {}
+    for _k in _de:
+        _b = str(_k).split('__')[0]
+        if _b not in _pde_by_base or str(_k).endswith('__joung'): _pde_by_base[_b] = _de[_k]
+    _probe_tfs = [g for g in (train_genes or []) if g in _pde_by_base and g in _g2i][:32]
+    _probe_obs = np.stack([np.asarray(_pde_by_base[g], np.float32) for g in _probe_tfs]) if _probe_tfs else None
     _probe_xctrl = (torch.tensor(X[np.asarray(control_idx)[:256]], dtype=torch.float32, device=device)
                     if _probe_tfs else None)
     _probe_beta = float(config['phase1'].get('pert_mutilate_beta', 1.0))
     _probe_struct = config['model'].get('pert_intervene_mode', 'legacy') == 'structural'
 
+    _probe_err_shown = [False]
+
     def _train_disc_probe():
+        # Returns {'train_disc_resid', 'train_A_gap'}. A_gap = mean(1 − centered-cos(Δ_A, Δ_{A=0}))
+        # over the probe TFs (one extra do-op pass with model.dag.disabled=True; cheap, every log step).
+        nan = {'train_disc_resid': float('nan'), 'train_A_gap': float('nan')}
         if not _probe_tfs or delta_drift_np is None:
-            return float('nan')
+            return nan
         try:
             was_tr = model.training; model.eval()
             with torch.no_grad():
                 _, _, epsc = model.encoder(_probe_xctrl)
-                A_ = model.dag.sample_A(n_samples=1).squeeze(0)
                 pdec = getattr(model, 'pert_decoder', None) or model.decoder
-                ctrl_rec = pdec(model.dag.scm_forward(epsc, A_)).mean(0)
-                preds = []
-                for g in _probe_tfs:
-                    S = model.compute_shift(torch.tensor([_g2i[g]], device=device)).sum(0)
-                    u = model.refine_u((_probe_beta * S.abs()).clamp(max=1.0), S)
-                    eps_t = epsc + S.unsqueeze(0) if _probe_struct else epsc
-                    z_post = model.dag.scm_intervene_u(epsc, A_, eps_t, u)[0]
-                    preds.append((pdec(z_post).mean(0) - ctrl_rec).cpu().numpy())
+
+                def _doop(disabled):
+                    model.dag.disabled = disabled
+                    A_ = model.dag.sample_A(n_samples=1).squeeze(0)
+                    cr = pdec(model.dag.scm_forward(epsc, A_)).mean(0)
+                    out = []
+                    for g in _probe_tfs:
+                        S = model.compute_shift(torch.tensor([_g2i[g]], device=device)).sum(0)
+                        u = model.refine_u((_probe_beta * S.abs()).clamp(max=1.0), S)
+                        eps_t = epsc + S.unsqueeze(0) if _probe_struct else epsc
+                        z_post = model.dag.scm_intervene_u(epsc, A_, eps_t, u)[0]
+                        out.append((pdec(z_post).mean(0) - cr).cpu().numpy())
+                    return np.stack(out)
+                predA = _doop(False)
+                pred0 = _doop(True)
+                model.dag.disabled = False
             if was_tr:
                 model.train()
-            P = np.stack(preds) - delta_drift_np; O = _probe_obs - delta_drift_np
+
             def _zr(M):
                 M = M - M.mean(1, keepdims=True); return M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
+            P = predA - delta_drift_np; O = _probe_obs - delta_drift_np
             C = _zr(P) @ _zr(O).T; dg = np.diag(C)[:, None]; T = len(P)
-            return float(((dg > C).sum(1) / (T - 1)).mean())    # train disc_resid, chance 0.5
-        except Exception:
-            try: model.train()
+            disc = float(((dg > C).sum(1) / (T - 1)).mean())        # train disc_resid, chance 0.5
+            Pc, P0 = predA - predA.mean(1, keepdims=True), pred0 - pred0.mean(1, keepdims=True)
+            cos = (Pc * P0).sum(1) / (np.linalg.norm(Pc, axis=1) * np.linalg.norm(P0, axis=1) + 1e-9)
+            return {'train_disc_resid': disc, 'train_A_gap': float(np.mean(1.0 - cos))}
+        except Exception as e:
+            try: model.dag.disabled = False; model.train()
             except Exception: pass
-            return float('nan')
+            if not _probe_err_shown[0]:
+                print(f"[probe] train_disc/A_gap error (surfaced once): {type(e).__name__}: {e}", flush=True)
+                _probe_err_shown[0] = True
+            return nan
 
     # exp20 Phase-2 mode-collapse fix: per-gene std of the drift-removed target Δ over train TFs.
     # Whitening the MSE by this makes the loss reward getting the residual DIRECTION right rather
@@ -511,6 +540,7 @@ def train_vae(config, data_dict=None, device=None):
         frozen_decoder_weight=frozen_decoder_weight,
         scm_nonlinear=bool(m.get('scm_nonlinear', False)),
         n_picard=int(m.get("scm_picard_iters", 40)),
+        interaction_rank=int(m.get('interaction_rank', 0)),
         scm_solve_ridge=float(m.get("scm_solve_ridge", 0.0)),
         decoder_mask=(torch.as_tensor(decoder_mask_np) if decoder_mask_np is not None else None),
         decoder_mask_freeze=bool(m.get('dec_mask_freeze', False)),
@@ -520,12 +550,119 @@ def train_vae(config, data_dict=None, device=None):
           f"decoder={m.get('decoder_type', 'linear')}, shift_encoder={use_shift_encoder})")
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
+    # ── CAPABILITY 1: warm-start from a pre-trained checkpoint (default no-op) ──────────────
+    # phase1.init_from_checkpoint: path to a saved checkpoint whose model weights are loaded
+    # into the freshly-built model with strict=False, so new/mismatched keys (e.g. an added
+    # interaction head) are ignored. Lets us FINE-TUNE a pre-trained singles model on combos
+    # instead of retraining from scratch. Default ''/None → block is skipped entirely, so every
+    # existing arm is byte-for-byte unchanged. Runs here (the single construction site) so it
+    # covers BOTH the joung and joung_norman branches with one edit.
+    _init_ckpt = p1.get('init_from_checkpoint', None) or ''
+    _warm_pert_label_loaded = False   # set True below if the checkpoint restored pert_label
+    if _init_ckpt:
+        print(f"[warm-start] loading model weights from {_init_ckpt} (strict=False, on CPU)")
+        _wc = torch.load(_init_ckpt, map_location='cpu', weights_only=False)
+        # Match the save format used by this pipeline: torch.save writes the weights under
+        # 'model_state_dict' (see the checkpoint save block below and load_shift_model in
+        # evaluation/run_shift_eval_norman.py). Fall back to other common keys / a bare state dict.
+        if isinstance(_wc, dict):
+            _sd = (_wc.get('model_state_dict') or _wc.get('model')
+                   or _wc.get('state_dict') or _wc)
+        else:
+            _sd = _wc
+        _res = model.load_state_dict(_sd, strict=False)
+        _n_ckpt = len(_sd)
+        _n_unexpected = len(_res.unexpected_keys)
+        _n_missing = len(_res.missing_keys)
+        _n_loaded = _n_ckpt - _n_unexpected
+        model.to(device)  # in-place copy already lands on device; safety net for buffers
+        print(f"[warm-start] loaded {_n_loaded}/{_n_ckpt} checkpoint tensors "
+              f"({_n_unexpected} skipped/unexpected, {_n_missing} model keys left at init/missing)")
+        # The shift-encoder descriptor (pert_label) is built by a RANDOMIZED PCA (torch.pca_lowrank,
+        # unseeded) — each run yields differently rotated/sign-flipped axes. The warm-started
+        # shift_encoder was trained against the SOURCE checkpoint's pert_label, so rebuilding it fresh
+        # below (set_pert_labels) would feed the transplanted encoder a mismatched descriptor →
+        # garbage shifts (frozen arm singles collapse; re-trained arms lose the source calibration).
+        # Keep the checkpoint's pert_label instead of rebuilding when warm-starting.
+        _warm_pert_label_loaded = ('pert_label' in _sd) and ('pert_label' not in _res.missing_keys)
+
+    # ── CAPABILITY 2: freeze the singles path, train ONLY the interaction head (default off) ──
+    # phase1.freeze_singles_path: when True (applied AFTER warm-start), freeze the encoder,
+    # decoder, dag and shift_encoder — plus every other non-interaction param (shift_scale,
+    # u_gate, eps_mix_net, pert_decoder, …) — so ONLY the zero-init interaction head
+    # (interaction_U / interaction_out) stays trainable. S_int=0 for single perturbations, so
+    # with everything else frozen the singles predictions remain byte-identical while the head
+    # learns combo non-additivity. Guarded for None (head exists only when interaction_rank>0).
+    # The optimizer is built later (below) after this freeze, so it only sees trainable params.
+    _freeze_singles = bool(p1.get('freeze_singles_path', False))
+    if _freeze_singles:
+        for _p in model.parameters():
+            _p.requires_grad_(False)
+        _frozen = [nm for nm in ('encoder', 'decoder', 'dag', 'shift_encoder')
+                   if getattr(model, nm, None) is not None]
+        _head = [nm for nm in ('interaction_U', 'interaction_out')
+                 if getattr(model, nm, None) is not None]
+        for nm in _head:
+            for _p in getattr(model, nm).parameters():
+                _p.requires_grad_(True)
+        _n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"[freeze_singles_path] froze {_frozen} (+ all other non-interaction params); "
+              f"trainable head = {_head or '[]'}; {_n_train:,} trainable params")
+        if not _head:
+            print("[freeze_singles_path] WARNING: no interaction head (interaction_rank==0) — "
+                  "0 trainable params. Set model.interaction_rank>0 to fine-tune combos.")
+
+    # ── CAPABILITY 3: granular partial freeze (default off) ──────────────────────────────────
+    # phase1.freeze_modules: list of submodule/param names to FREEZE, leaving everything else
+    # trainable — the interior of the singles↔combo frontier. e.g. ['encoder','shift_encoder']
+    # protects the zero-shot singles map (x→ε and ESM→shift, which carry held-out generalization)
+    # while letting the decoder + DAG (+ shift_scale, interaction head) retune on combos for more
+    # combo magnitude, at a controlled singles cost. Applied AFTER warm-start, before the optimizer.
+    # Handles both nn.Modules (encoder/decoder/dag/shift_encoder) and top-level nn.Parameters
+    # (shift_scale/interaction_U/interaction_out). Mutually exclusive with freeze_singles_path.
+    _freeze_modules = p1.get('freeze_modules', None) or []
+    if _freeze_modules and not _freeze_singles:
+        _fm = []
+        for nm in _freeze_modules:
+            obj = getattr(model, nm, None)
+            if obj is None:
+                print(f"[freeze_modules] WARNING: no attribute '{nm}' on model — skipped"); continue
+            if isinstance(obj, torch.nn.Parameter):
+                obj.requires_grad_(False); _fm.append(nm)
+            elif hasattr(obj, 'parameters'):
+                for _p in obj.parameters(): _p.requires_grad_(False)
+                _fm.append(nm)
+        _n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        _n_froz = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+        print(f"[freeze_modules] froze {_fm} ({_n_froz:,} params); {_n_train:,} trainable params remain")
+
+    # ── CAPABILITY 4: L2-SP distillation anchor (default off) ────────────────────────────────
+    # phase1.param_anchor_weight: L2 penalty pulling each TRAINABLE, source-initialized param back
+    # toward its warm-started value (L2-SP / "distillation-lite"). Lets a partial-unfreeze arm
+    # (decoder+DAG trainable) adapt to combos while staying NEAR the singles solution → protects
+    # held-out singles at less cost than freezing. The zero-init interaction head is EXCLUDED (it
+    # must be free to grow S_int, not anchored to 0). Snapshot taken here (post-warm-start,
+    # post-freeze); penalty added per-batch in the training loop.
+    _anchor_w = float(p1.get('param_anchor_weight', 0.0))
+    _anchor_ref = None
+    if _anchor_w > 0 and _init_ckpt:
+        _anchor_ref = [(p, p.detach().clone()) for n, p in model.named_parameters()
+                       if p.requires_grad and not n.startswith(('interaction_U', 'interaction_out'))]
+        _na = sum(p.numel() for p, _ in _anchor_ref)
+        print(f"[param_anchor] L2-SP to source on {len(_anchor_ref)} trainable tensors ({_na:,} params), weight={_anchor_w}")
+
     # ── Perturbation labels for the shift encoder (SCCVAE-style) ──────────────
     # Top-PCA of the *transposed* control expression matrix: a per-gene embedding
     # derived purely from control co-expression, so it exists for held-out /
     # unseen genes (the zero-shot generalisation engine). Computed once and
     # stored in the model's pert_label buffer (ships with the checkpoint).
-    if use_shift_encoder:
+    if use_shift_encoder and _warm_pert_label_loaded:
+        # Warm-start: keep the source checkpoint's pert_label (the transplanted shift_encoder was
+        # trained against it). Rebuilding via the unseeded randomized PCA would rotate the axes and
+        # break the encoder — see the warm-start block above.
+        print(f"Shift encoder: KEEPING warm-started descriptor pert_label {tuple(model.pert_label.shape)} "
+              f"(skipped randomized rebuild to stay consistent with the source shift_encoder)")
+    elif use_shift_encoder:
         # Per-gene shift-encoder descriptor. 'pca' = control co-expression PCA (baseline,
         # info-free for silent TFs → discrimination collapse); 'pca+regulon'/'pca+esm' add
         # TF-identity signal that generalises zero-shot. Width must == shift_label_dim.
@@ -539,21 +676,47 @@ def train_vae(config, data_dict=None, device=None):
         print(f"Shift encoder: descriptor='{descriptor}' shape {tuple(model.pert_label.shape)}")
 
     # ── Retrieval augmentation: build the TRAIN-ONLY memory (leakage-safe) ──────────────────────
-    # DB rows = train-split TFs only; keys = their ESM descriptor; values init = D†·(train residual).
-    # Query self-masked to its own row; val/test TFs never inserted. See CausalVAE.install_retrieval.
-    if bool(config['phase1'].get('retrieval', False)) and train_genes and delta_drift_np is not None:
-        tr_g = [g for g in train_genes if g in _de and g in _g2i]
-        tr_idx = [_g2i[g] for g in tr_g]
-        resid = np.stack([np.asarray(_de[g], np.float32) - delta_drift_np for g in tr_g])   # [N_tr, n_genes]
+    # DB rows = train-split TFs only; keys = ESM descriptor; values = D†·(train residual), self-masked.
+    # D† AUDIT (REALM/kNN-LM/RETRO): on a LEARNED decoder, D† at init is a near-random projection
+    # (REALM cold-start) and D keeps changing as A restructures z. Fixes (both default OFF → build-at-
+    # init, which is CORRECT for a FROZEN decoder since D never changes):
+    #   • retrieval_refresh_every>0 — REALM-style: recompute D†·residual from the CURRENT decoder every
+    #     N epochs and re-anchor retr_val (kept learnable between refreshes).
+    #   • retrieval_build_epoch>0   — warmup-then-build: do the first re-anchor only after warmup.
+    # Structure is ALWAYS installed here (before the optimizer) so retr params are optimized; the fixes
+    # only overwrite retr_val.data later in the epoch loop.
+    _retr_on = bool(config['phase1'].get('retrieval', False)) and train_genes and delta_drift_np is not None
+    _retr_refresh = int(config['phase1'].get('retrieval_refresh_every', 0))
+    _retr_build_epoch = int(config['phase1'].get('retrieval_build_epoch', 0))
+    _retr_resid = _retr_tr_idx = None
+    if _retr_on:
+        # NAMESPACE-AWARE (mirror the drift fix): multi-context de_single keys are GENE__joung /
+        # GENE__norman while train_genes are plain — resolve base gene → de vector (prefer __joung).
+        _de_by_base = {}
+        for _k in _de:
+            _b = str(_k).split('__')[0]
+            if _b not in _de_by_base or str(_k).endswith('__joung'):
+                _de_by_base[_b] = _de[_k]
+        _retr_tr_g = [g for g in train_genes if g in _de_by_base and g in _g2i]
+        _retr_tr_idx = [_g2i[g] for g in _retr_tr_g]
+        _retr_resid = np.stack([np.asarray(_de_by_base[g], np.float32) - delta_drift_np for g in _retr_tr_g])
+        if not _retr_tr_g:
+            raise RuntimeError("retrieval enabled but no train TFs matched de_single (namespace bug?)")
+        print(f"[retrieval] resolved {len(_retr_tr_g)} train-TF residuals (namespace-aware)", flush=True)
+
+    def _retr_dagger_values():                                              # D†·residual on CURRENT decoder
         with torch.no_grad():
-            D = model.decoder.effective_D().detach().float().cpu().numpy()   # [n_genes, d]
-            val_init = (resid @ np.linalg.pinv(D).T).astype(np.float32)       # D†·residual -> [N_tr, d]
-        model.install_retrieval(tr_idx, val_init,
+            D = model.decoder.effective_D().detach().float().cpu().numpy()  # [n_genes, d]
+        return (_retr_resid @ np.linalg.pinv(D).T).astype(np.float32)       # -> [N_tr, d]
+
+    if _retr_on:
+        model.install_retrieval(_retr_tr_idx, _retr_dagger_values(),
                                 key_dim=int(config['phase1'].get('retrieval_key_dim', 128)),
                                 k=int(config['phase1'].get('retrieval_k', 10)),
                                 tau=float(config['phase1'].get('retrieval_tau', 1.0)))
-        print(f"[retrieval] train-only memory: {len(tr_idx)} TFs | k={config['phase1'].get('retrieval_k', 10)} "
-              f"| val_init=D†·residual | self-masked, leakage-safe")
+        print(f"[retrieval] installed {len(_retr_tr_idx)} TFs | k={config['phase1'].get('retrieval_k', 10)} "
+              f"| D†·residual | build_epoch={_retr_build_epoch} refresh_every={_retr_refresh} "
+              f"(0/0=build-at-init, correct for frozen D) | self-masked, leakage-safe")
 
     # ── Fate labels for the identifiability regularizer (Joung NNLS annotation) ──
     # Per-gene integer fate id (Cao-mouse developmental fate), aligned to gene_names;
@@ -580,7 +743,24 @@ def train_vae(config, data_dict=None, device=None):
               f"({n_ann}/{len(gene_names)} genes annotated, {len(cats)} fates)")
 
     # Optimizer
-    optimizer = optim.Adam(model.parameters(), lr=p1['lr'])
+    # Generalization knobs (both default to no-op so existing arms are byte-for-byte unchanged):
+    #  - weight_decay: L2 on all params (0.0 → identical to plain Adam).
+    #  - esm_noise_std: train-only Gaussian noise on the shift-encoder's ESM input (0.0 → no-op),
+    #    set on the ShiftEncoder below so it fires inside ShiftEncoder.forward during training.
+    _weight_decay = float(p1.get('weight_decay', 0.0))
+    _esm_noise_std = float(p1.get('esm_noise_std', 0.0))
+    if getattr(model, 'shift_encoder', None) is not None:
+        model.shift_encoder.esm_noise_std = _esm_noise_std
+    print(f"[reg] weight_decay={_weight_decay} esm_noise_std={_esm_noise_std}")
+    # Built AFTER the optional freeze_singles_path block above. When freezing, restrict Adam to
+    # trainable params (the interaction head) so frozen submodules get no optimizer state. When
+    # NOT freezing (default), pass model.parameters() unchanged → existing arms are byte-for-byte
+    # identical (all params have requires_grad=True, so the filter would be a no-op anyway).
+    if _freeze_singles or _freeze_modules:
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
+                               lr=p1['lr'], weight_decay=_weight_decay)
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=p1['lr'], weight_decay=_weight_decay)
     warmup_epochs = p1.get('lr_warmup_epochs', 5)
     warmup_scheduler = optim.lr_scheduler.LinearLR(
         optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_epochs)
@@ -650,9 +830,11 @@ def train_vae(config, data_dict=None, device=None):
         combo_train_keys, combo_test_keys = set(), set()
         if combo_perts_all and float(p1.get('combo_train_frac', 0.0)) > 0:
             holdout = p1.get('combo_holdout_keys')
-            if holdout:
+            if holdout is not None:
                 # FIXED holdout: train on every combo EXCEPT these (used to honestly hold out
                 # the RL test pairs, since the RL split is independent of the hash split).
+                # An explicit EMPTY list means hold out NOTHING → train on ALL combos (the
+                # production/deployment model). None (unset) → fall through to the hash split.
                 ho = {tuple(sorted(k)) for k in holdout}
                 for key in combo_perts_all:
                     (combo_test_keys if tuple(sorted(key)) in ho else combo_train_keys).add(key)
@@ -662,11 +844,21 @@ def train_vae(config, data_dict=None, device=None):
                 import hashlib
                 frac = float(p1.get('combo_train_frac', 0.7))
                 sseed = int(config['data'].get('split_seed', 42))
+                # LEAKAGE GUARD: a combo is train-eligible ONLY if BOTH its TFs are TRAIN singles, so
+                # held-out single TFs never leak into training via a combo. Combos touching any
+                # val/test single are FORCED to the held-out combo test set. Then a small few-shot
+                # fraction (combo_train_frac, e.g. 0.25) of the eligible pool goes to training.
+                _train_singles = set(pert_split['train']) if pert_split else None
+                n_inelig = 0
                 for key in combo_perts_all:
+                    elig = _train_singles is None or all(str(g) in _train_singles for g in key)
+                    if not elig:
+                        combo_test_keys.add(key); n_inelig += 1; continue
                     hh = int(hashlib.md5(f"{sseed}|{key[0]}|{key[1]}".encode()).hexdigest(), 16) % 1000 / 1000.0
                     (combo_train_keys if hh < frac else combo_test_keys).add(key)
-                print(f"Combo split: {len(combo_train_keys)} train / {len(combo_test_keys)} test "
-                      f"combos (frac={frac}); {len(combo_perts_all)} total")
+                print(f"Combo split (few-shot, leakage-guarded): {len(combo_train_keys)} train / "
+                      f"{len(combo_test_keys)} held-out ({n_inelig} forced-out: touch a held-out single); "
+                      f"frac={frac}; {len(combo_perts_all)} total")
             # stash split into config so it travels with every checkpoint (eval filters held-out)
             config.setdefault('phase1', {})['combo_test_keys'] = [list(k) for k in sorted(combo_test_keys)]
             config['phase1']['combo_train_keys'] = [list(k) for k in sorted(combo_train_keys)]
@@ -759,9 +951,24 @@ def train_vae(config, data_dict=None, device=None):
             print(f"[hard-self-gate] oracle_gate = top-{kk} |D| per gene set at epoch {epoch} "
                   f"(mean open {float(model.oracle_gate.mean()):.3f})", flush=True)
 
+        # D† AUDIT FIX: re-anchor the retrieval value memory to the CURRENT decoder (REALM-style
+        # refresh / warmup-then-build), recomputing D†·residual so v_i tracks the evolving D instead
+        # of the stale init projection. retr_val stays learnable between re-anchors.
+        if _retr_on and getattr(model, 'retr_val', None) is not None:
+            _reanchor = (_retr_build_epoch > 0 and epoch == _retr_build_epoch) or \
+                        (_retr_refresh > 0 and epoch % _retr_refresh == 0)
+            if _reanchor:
+                with torch.no_grad():
+                    model.retr_val.data.copy_(torch.as_tensor(_retr_dagger_values(),
+                                                              device=model.retr_val.device))
+                print(f"[retrieval] re-anchored values to current decoder at epoch {epoch} (D†·residual)",
+                      flush=True)
+
         # Freeze theta during Phase A (u-score path only): SCM solve happens but
         # theta does not update.  Unfreeze at dag_start_epoch.
-        if theta_frozen_phase_a:
+        # Guard: when freeze_singles_path is on, OR 'dag' is in freeze_modules, the dag (incl.
+        # theta) must stay frozen, so do NOT let this toggle re-enable it at dag_start_epoch.
+        if theta_frozen_phase_a and not _freeze_singles and 'dag' not in _freeze_modules:
             model.dag.theta.requires_grad_(dag_active)
 
         # Beta annealing: 0.01 -> 1.0 over first 50 epochs (from dag_start onward)
@@ -901,6 +1108,9 @@ def train_vae(config, data_dict=None, device=None):
                             target_whiten=pert_whiten_t,
                             pseudobulk_targets=pseudobulk_t,
                             project_shared=bool(p1.get('pert_project_shared', False)),
+                            pert_deg_mse_weight=float(p1.get('pert_deg_mse_weight', 0.0)),
+                            pert_deg_mse_thr=float(p1.get('pert_deg_mse_thr', 0.1)),
+                            interaction_l2_weight=float(p1.get('pert_interaction_l2', 0.0)),
                         )
                     elif use_shift_encoder:
                         # Learned-shift set loss (MSE on mean shift + MMD [+ energy]).
@@ -1017,9 +1227,22 @@ def train_vae(config, data_dict=None, device=None):
                 optimizer.zero_grad()
                 continue
 
+            # L2-SP distillation anchor: pull trainable source-initialized params toward warm-start.
+            if _anchor_ref is not None:
+                anchor_pen = sum(((p - ref) ** 2).sum() for p, ref in _anchor_ref)
+                losses['total'] = losses['total'] + _anchor_w * anchor_pen
+
             # Gradient accumulation: scale loss and accumulate
             scaled_loss = losses['total'] / accumulation_steps
-            scaled_loss.backward()
+            # No-grad batch guard: when the singles path is frozen (freeze_singles_path)
+            # and only the interaction head trains, singles-only sentences produce a loss
+            # with NO path to any trainable param (the interaction head is exactly 0 on
+            # singles) → scaled_loss.requires_grad is False and backward() would raise
+            # "element 0 of tensors does not require grad". Skip backward on such batches;
+            # the accumulation-boundary optimizer.step() below is a safe no-op when no
+            # grads were accumulated (clip/step filter params whose .grad is None).
+            if scaled_loss.requires_grad:
+                scaled_loss.backward()
 
             if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(obs_loader):
                 # Capture per-module grad norms BEFORE clip/zero. The old code read
@@ -1154,7 +1377,9 @@ def train_vae(config, data_dict=None, device=None):
             # train_disc_resid: how well the model fits the TF-specific signal on SEEN TFs (overfit
             # signal). Every 5 epochs (cheap do-op on a fixed 32-TF subset). chance 0.5.
             if epoch % 5 == 0 or epoch == int(config['phase1']['n_epochs']):
-                log_dict['train/train_disc_resid'] = _train_disc_probe()
+                _pr = _train_disc_probe()                       # {'train_disc_resid','train_A_gap'}
+                log_dict['train/train_disc_resid'] = _pr['train_disc_resid']
+                log_dict['train/train_A_gap'] = _pr['train_A_gap']
             # Per-module gradient norms — captured in the step block BEFORE
             # optimizer.zero_grad() (reading p.grad here would always be None/0,
             # since the epoch's final step zeroes grads before this block runs).
@@ -1186,9 +1411,14 @@ def train_vae(config, data_dict=None, device=None):
                     ('match_delta',     'pert_diag/match_delta'),
                     # shift-encoder loss diagnostics
                     ('mse_term',        'pert_diag/mse_term'),
+                    ('deg_mse_term',    'pert_diag/deg_mse_term'),
                     ('mmd_term',        'pert_diag/mmd_term'),
+                    ('contrastive_term','pert_diag/contrastive_term'),
                     ('energy_term',     'pert_diag/energy_term'),
                     ('shift_l1_term',   'pert_diag/shift_l1_term'),
+                    ('target_l0_term',  'pert_diag/target_l0_term'),
+                    ('gate_open_frac',  'pert_diag/gate_open_frac'),
+                    ('mean_u',          'pert_diag/mean_u'),
                     ('mean_shift_norm', 'pert_diag/mean_shift_norm'),
                     ('shift_scale',     'pert_diag/shift_scale'),
                 ]:

@@ -1,0 +1,15 @@
+{
+  "tag": "v2_combo_resid",
+  "n_test": 109,
+  "n_celltypes": 20,
+  "chance_top1": 0.05,
+  "fate_top1": 0.101,
+  "fate_top3": 0.266,
+  "fate_top5": 0.413,
+  "fate_betacos": 0.11,
+  "fate_retrieval_top1": 0.009,
+  "chance_retrieval": 0.009,
+  "obs_margin_median": 0.039,
+  "obs_margin_mean": 0.049,
+  "frac_obs_margin_gt_0.1": 0.11
+}

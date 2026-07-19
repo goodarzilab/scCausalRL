@@ -63,10 +63,11 @@ class DAGModule(nn.Module):
         dagma_s: float — DAGMA s parameter (kept for compatibility; DAGMA off in Phase F+)
     """
 
-    def __init__(self, d=64, tau=1.0, dagma_s=1.0):
+    def __init__(self, d=64, tau=1.0, dagma_s=1.0, disabled=False):
         super().__init__()
         self.d = d
         self.dagma_s = dagma_s
+        self.disabled = bool(disabled)   # A≡0 control: SCM becomes identity (z=ε), no DAG dynamics
         self.register_buffer('tau', torch.tensor(tau, dtype=torch.float32))
 
         # Gate logits.  Initialised near zero so the gate sigmoid sits around 0.5
@@ -113,6 +114,8 @@ class DAGModule(nn.Module):
 
         Returns: Tensor[n_samples, d, d] — real-valued, can be negative.
         """
+        if self.disabled:                                               # A≡0 control
+            return torch.zeros(n_samples, self.d, self.d, device=self.theta.device, dtype=self.theta.dtype)
         gates = self._sample_gates(n_samples=n_samples)                 # [N, d, d] in [0, 1]
         # Broadcast: weights [d, d] · mask [d, d] · gates [N, d, d]
         A = gates * self.weights.unsqueeze(0) * self.mask.unsqueeze(0)  # [N, d, d]
@@ -148,6 +151,8 @@ class DAGModule(nn.Module):
         """Return the per-edge gate probabilities sigmoid(theta / tau) * mask
         — the probability that each edge is "on".  Note this does NOT include
         the weight magnitudes; use `get_signed_edges` for the actual A values."""
+        if self.disabled:
+            return torch.zeros(self.d, self.d, device=self.theta.device, dtype=self.theta.dtype)
         probs = torch.sigmoid(self.theta / self.tau)
         return probs * self.mask
 

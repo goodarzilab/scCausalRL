@@ -1,0 +1,127 @@
+{
+  "n_held_combos": 12,
+  "rows": [
+    {
+      "method": "true-combo do-op (oracle)",
+      "pearson_delta": 0.15166357770524927,
+      "pearson_delta_resid": -0.0915002129913114,
+      "discrimination_cos": 0.5303030303030303,
+      "discrimination_resid": 0.5909090909090909,
+      "effect_spearman_resid": -0.08757373569431993,
+      "deg_auroc_resid": 0.8352107373751942,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.2319665623244559
+    },
+    {
+      "method": "MPC \u00b7 curated",
+      "pearson_delta": 0.3954705919789952,
+      "pearson_delta_resid": 0.4896951580071096,
+      "discrimination_cos": 0.49999999999999994,
+      "discrimination_resid": 0.5,
+      "effect_spearman_resid": 0.32697058517983335,
+      "deg_auroc_resid": 0.8613509531243505,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.18862106327287617
+    },
+    {
+      "method": "distill_BC+PPO \u00b7 curated",
+      "pearson_delta": 0.3954705919789952,
+      "pearson_delta_resid": 0.4896951580071096,
+      "discrimination_cos": 0.49999999999999994,
+      "discrimination_resid": 0.5,
+      "effect_spearman_resid": 0.32697058517983335,
+      "deg_auroc_resid": 0.8613509531243505,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.18862106327287617
+    },
+    {
+      "method": "set-PPO \u00b7 RESID \u00b7 curated",
+      "pearson_delta": 0.31531351980679795,
+      "pearson_delta_resid": 0.420647746286859,
+      "discrimination_cos": 0.49999999999999994,
+      "discrimination_resid": 0.5,
+      "effect_spearman_resid": 0.30936349568095123,
+      "deg_auroc_resid": 0.8663615080988091,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.13614326498203674
+    },
+    {
+      "method": "seq-PPO \u00b7 RESID \u00b7 curated",
+      "pearson_delta": 0.12933733878061598,
+      "pearson_delta_resid": -0.19038792976564525,
+      "discrimination_cos": 0.5,
+      "discrimination_resid": 0.49999999999999994,
+      "effect_spearman_resid": -0.17679208802150467,
+      "deg_auroc_resid": 0.8261510542727079,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.5055314964253281
+    },
+    {
+      "method": "set-PPO \u00b7 raw \u00b7 curated",
+      "pearson_delta": 0.2092994480767836,
+      "pearson_delta_resid": -0.016490902726163287,
+      "discrimination_cos": 0.5,
+      "discrimination_resid": 0.5,
+      "effect_spearman_resid": -0.06757391438240297,
+      "deg_auroc_resid": 0.8111702643828727,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.2734572355465661
+    },
+    {
+      "method": "seq-PPO \u00b7 raw \u00b7 curated",
+      "pearson_delta": 0.15830609483120892,
+      "pearson_delta_resid": -0.11924112242667557,
+      "discrimination_cos": 0.5,
+      "discrimination_resid": 0.49999999999999994,
+      "effect_spearman_resid": -0.1136723971962235,
+      "deg_auroc_resid": 0.8153267999400288,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.4379592135337762
+    },
+    {
+      "method": "set-PPO \u00b7 raw \u00b7 full(orig)",
+      "pearson_delta": 0.10203789819296138,
+      "pearson_delta_resid": -0.2651613299650544,
+      "discrimination_cos": 0.5,
+      "discrimination_resid": 0.49999999999999994,
+      "effect_spearman_resid": -0.21759183139881141,
+      "deg_auroc_resid": 0.8288062501767807,
+      "fate_top1": 0.0,
+      "fate_betacos": -0.5549380483856384
+    }
+  ],
+  "mpc_agreement": {
+    "true-combo do-op (oracle)": {
+      "jaccard_vs_mpc": 0.083,
+      "identical_set_frac": 0.0
+    },
+    "MPC \u00b7 curated": {
+      "jaccard_vs_mpc": 1.0,
+      "identical_set_frac": 1.0
+    },
+    "distill_BC+PPO \u00b7 curated": {
+      "jaccard_vs_mpc": 1.0,
+      "identical_set_frac": 1.0
+    },
+    "set-PPO \u00b7 RESID \u00b7 curated": {
+      "jaccard_vs_mpc": 0.333,
+      "identical_set_frac": 0.0
+    },
+    "seq-PPO \u00b7 RESID \u00b7 curated": {
+      "jaccard_vs_mpc": 0.333,
+      "identical_set_frac": 0.0
+    },
+    "set-PPO \u00b7 raw \u00b7 curated": {
+      "jaccard_vs_mpc": 0.0,
+      "identical_set_frac": 0.0
+    },
+    "seq-PPO \u00b7 raw \u00b7 curated": {
+      "jaccard_vs_mpc": 0.0,
+      "identical_set_frac": 0.0
+    },
+    "set-PPO \u00b7 raw \u00b7 full(orig)": {
+      "jaccard_vs_mpc": 0.0,
+      "identical_set_frac": 0.0
+    }
+  }
+}

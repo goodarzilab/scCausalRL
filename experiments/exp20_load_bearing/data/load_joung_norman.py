@@ -32,16 +32,20 @@ def _de(Xa, pert_idx, ctrl_mean):
 
 def load_joung_norman(norman_path='/large_storage/goodarzilab/shervin/CausalBioRL/Norman/',
                       train_frac=0.8, val_frac=0.1, split_seed=42, min_cells_per_pert=5,
-                      gene_vocab=None, effective_tfs=None, joung_proc_path=None):
+                      gene_vocab=None, effective_tfs=None, joung_proc_path=None,
+                      load_combos=False, joung_combo_proc_path=None, min_combo_cells=20):
     from data.load_joung import load_joung, _read_gene_list
     from data.load_norman_aligned import load_norman_aligned
 
     print("[jn] loading Joung (full gene axis)...")
     # joung_proc_path selects the Joung proc file (e.g. the vocab-v2 proc = shared axis directly).
     # gene_vocab subsets that axis; effective_tfs filters Joung's pert vocab here and Norman's below.
+    # load_combos threads Joung's combo atlas so JN combo-training sees BOTH datasets' combos.
     _pp = {} if joung_proc_path is None else {'proc_path': joung_proc_path}
     J = load_joung(n_hvg=None, min_cells_per_pert=min_cells_per_pert,
-                   gene_vocab=gene_vocab, effective_tfs=effective_tfs, **_pp)
+                   gene_vocab=gene_vocab, effective_tfs=effective_tfs,
+                   load_combos=load_combos, combo_proc_path=joung_combo_proc_path,
+                   min_combo_cells=min_combo_cells, **_pp)
     genes = [str(g) for g in J['gene_names']]; G = len(genes)
     Jx = J['adata'].X; Jx = Jx.toarray() if sp.issparse(Jx) else np.asarray(Jx)
     print(f"[jn] aligning Norman onto Joung's {G}-gene axis...")
@@ -82,10 +86,12 @@ def load_joung_norman(norman_path='/large_storage/goodarzilab/shervin/CausalBioR
         single_perts[f'{g}__joung'] = list(idx)
     for g, idx in N['single_perts'].items():
         single_perts[f'{g}__norman'] = [nJ + i for i in idx]
+    # combo keys are gene TUPLES in BOTH loaders — keep them tuples (do NOT stringify Joung's), so the
+    # downstream hash-split / sorted(combo_test_keys) sees one consistent key type (was: tuple vs str crash).
     for k, idx in (J.get('combo_perts') or {}).items():
-        combo_perts[(f'{k}')] = list(idx)
+        combo_perts[tuple(k)] = list(idx)
     for k, idx in (N.get('combo_perts') or {}).items():
-        combo_perts[k] = [nJ + i for i in idx]
+        combo_perts[tuple(k)] = [nJ + i for i in idx]
     control_idx = list(np.where(is_ctrl)[0])
     adata.uns['de_single'] = de_single   # computed above, before the big arrays were freed
 

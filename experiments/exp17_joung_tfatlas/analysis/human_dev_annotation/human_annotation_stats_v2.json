@@ -1,0 +1,60 @@
+{
+  "method": "cosine_celllevel",
+  "n_TFs": 1084,
+  "n_celltypes": 165,
+  "production": {
+    "median_spec": 0.04929249042421785,
+    "q90_spec": 0.06714296494809599,
+    "max_spec": 0.19185339607865112,
+    "n_fdr_0.05": 48,
+    "n_fdr_0.10": 84,
+    "n_top10pct": 109
+  },
+  "paper_gt": {
+    "n_validated_TFs": 18,
+    "n_scored_TFs": 17,
+    "n_cell_types": 8,
+    "pool_reachable": 82,
+    "pool_all": 172,
+    "chance": {
+      "reachable_r@1": 0.07,
+      "reachable_r@5": 0.26,
+      "reachable_r@10": 0.42
+    },
+    "methods": {
+      "cosine_S6": {
+        "r@1": 0.25,
+        "r@5": 0.56,
+        "r@10": 0.75,
+        "medrank": 3,
+        "all_r@1": 0.19,
+        "all_medrank": 8
+      },
+      "cosine_celllevel \u2605": {
+        "r@1": 0.31,
+        "r@5": 0.69,
+        "r@10": 0.81,
+        "medrank": 3,
+        "all_r@1": 0.19,
+        "all_medrank": 5
+      },
+      "celltypist_LRsig": {
+        "r@1": 0.31,
+        "r@5": 0.75,
+        "r@10": 0.81,
+        "medrank": 2,
+        "all_r@1": 0.25,
+        "all_medrank": 3
+      },
+      "celltypist_per\u0394P": {
+        "r@1": 0.0,
+        "r@5": 0.18,
+        "r@10": 0.18,
+        "medrank": 21,
+        "all_r@1": 0.0,
+        "all_medrank": 56
+      }
+    }
+  },
+  "recall_fig": "experiments/figures/joung/exp17_annotation_recall.png"
+}

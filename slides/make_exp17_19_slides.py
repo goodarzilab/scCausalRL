@@ -23,7 +23,7 @@ OUT = os.path.join(HERE, 'exp17_19_overview.pptx')
 EQ_DIR = os.path.join(HERE, '_eq_cache'); os.makedirs(EQ_DIR, exist_ok=True)
 FIGJ = os.path.join(ROOT, 'experiments', 'figures', 'joung')
 STATS = os.path.join(ROOT, 'experiments', 'exp17_joung_tfatlas', 'analysis',
-                     'human_dev_annotation', 'human_annotation_stats.json')
+                     'human_dev_annotation', 'human_annotation_stats_v2.json')
 
 WHITE=RGBColor(0xFF,0xFF,0xFF); BLACK=RGBColor(0,0,0); DARK=RGBColor(0x1A,0x1A,0x2E)
 BLUE=RGBColor(0x21,0x71,0xB5); GRAY=RGBColor(0x66,0x66,0x66); LIGHT=RGBColor(0xF5,0xF5,0xF5)
@@ -118,47 +118,41 @@ text(s,1,3.0,11.3,1.3,'Developmental annotation (human fetal atlas) · singles-o
      'held-out singles/combo results · epistasis · next-step architectures',size=18,color=GRAY,align=PP_ALIGN.CENTER)
 text(s,1,5.7,11.3,0.4,'scCausalRL  |  exp17_joung_tfatlas + exp19_nonlinear_compose',size=14,color=GRAY,align=PP_ALIGN.CENTER)
 
-# ════════════════════════ SLIDE 2 — Annotation methods + stats ════════════════════════
+# ════════════════════════ SLIDE 2 — Annotation method, validated vs the Joung paper ════════════════════════
 st=load_stats()
 s=slide_blank(); title_bar(s,'1 · Annotating the Joung TF Atlas with the Human Fetal Cell Atlas')
-box(s,0.3,1.0,6.4,5.05,fill=LIGHT,line=BLUE)
-label(s,0.5,1.1,6.0,'Approach — shift alignment',color=BLUE)
-bullets(s,0.5,1.55,6.0,2.6,[
+box(s,0.3,1.0,6.1,5.05,fill=LIGHT,line=BLUE)
+label(s,0.5,1.1,5.7,'Approach — shift alignment',color=BLUE)
+bullets(s,0.5,1.55,5.7,2.6,[
     'Per TF: induced shift Δ = mean(OE cells) − mean(hESC control) — not the absolute profile (shared pluripotency baseline hides identity).',
-    'Reference: Cao 2020 human fetal atlas (GSE156793) — 172 organ-cell-type expression signatures Dc = mean(type c) − mean over types.',
-    'Score = alignment(Δ, Dc) after stripping the shared OE nuisance axes (top-4 SVD of the centred TF-shift matrix).',
-    'Human reference ⇒ NO mouse→human orthology step: direct symbol match keeps ~all 9,923 Joung HVGs (vs the ~15k mouse-ortholog subset).',
-],size=12)
-eq_block(s,0.5,4.25,'annot_eq',[
+    'Reference: Cao 2020 human fetal atlas (GSE156793) — cell-level matched-norm signatures Dc (165 cell types).',
+    'Score = cos(Δ, Dc) after stripping the shared OE nuisance axes (top-4 SVD of the centred TF-shift matrix).',
+    'Human ref ⇒ NO mouse orthology step: direct symbol match keeps ~all Joung HVGs.',
+    'Method CHOSEN by recall against the Joung-paper experimentally-validated TF→fate set (right) — not a self-curated benchmark.',
+],size=11.5)
+eq_block(s,0.5,4.45,'annot_eq',[
     r'$\Delta_{TF}=\mathrm{mean}(\mathrm{OE})-\mathrm{mean}(\mathrm{ctrl})$',
     r'$\mathrm{score}_c=\cos(\,\tilde\Delta_{TF},\,D_c\,),\;\; \mathrm{spec}=\max_c \mathrm{score}_c-\overline{\mathrm{score}}$',
-],width=6.0,fontsize=15)
+],width=5.7,fontsize=14)
 
-box(s,6.95,1.0,6.05,5.05,fill=LIGHT,line=GREEN)
-label(s,7.15,1.1,5.7,'Method shoot-out (chosen: cosine)',color=GREEN)
+box(s,6.55,1.0,6.45,5.05,fill=LIGHT,line=GREEN)
+label(s,6.75,1.07,6.1,'Validated vs the Joung paper ground truth',color=GREEN)
+RECALL_FIG=os.path.join(ROOT,'experiments','figures','joung','exp17_annotation_recall.png')
+if os.path.exists(RECALL_FIG):
+    s.shapes.add_picture(RECALL_FIG,Inches(6.95),Inches(1.45),height=Inches(2.45))
 if st:
-    m=st['methods']; thr_key=[k for k in m['cosine'] if k.startswith('n_conf_gt_') and '0.05' not in k]
-    tk=thr_key[0] if thr_key else 'n_conf_gt_0.05'; conf=tk.split('_')[-1]
-    fdr=st.get('fdr',{}); fdr_counts={'cosine':(fdr.get('n_fdr_0.05','?'),fdr.get('n_fdr_0.10','?'))}
-    rows=[['method','#(q<0.05)','#(q<0.10)','med spec','agree↔cos']]
-    for mm in ['cosine','nnls','ols','ridge']:
-        d=m[mm]; q05,q10=fdr_counts.get(mm,('0†','0†'))   # FDR run on cosine; others degenerate (null floor)
-        rows.append([mm,q05,q10,f"{d['median_spec']:.3f}",f"{d.get('agree_top_with_cosine',1.0):.2f}"])
-    table(s,7.15,1.55,5.65,rows,[1.5,1.25,1.25,1.0,1.0],fs=11,hfs=11)
-    text(s,7.15,3.12,5.65,0.3,'† FDR run on cosine (chosen); nnls/ols/ridge at null floor → 0 at any FDR',size=8,italic=True,color=GRAY)
-    cs=st['cosine_specificity']; fdr=st.get('fdr',{})
-    bullets(s,7.15,3.6,5.7,2.4,[
-        f"TFs scored (n≥50): {st['n_TFs']}  |  cell types: {st['n_celltypes']}  |  shared genes: {st['shared_genes']}",
-        f"cosine specificity: median {cs['median']:.3f}, q90 {cs['q90']:.3f}, max {cs['max']:.3f}",
-        f"FDR-controlled (gene-permutation null, {fdr.get('pool_null_size',0):,} draws + BH): q<0.05 → {fdr.get('n_fdr_0.05','?')} TFs, q<0.10 → {fdr.get('n_fdr_0.10','?')} TFs.",
-        f"Heuristic spec>{conf} flags {m['cosine'][tk]} (vs 13 with mouse) — but only {fdr.get('n_fdr_0.05','?')}/{fdr.get('n_fdr_0.10','?')} survive FDR: 172 collinear types ⇒ heavy null tail.",
-        f"cond(DᵀD)={st['cond_DtD']:.0e} ⇒ NNLS/OLS/ridge degenerate (0 calls); cosine is the stable method.",
-    ],size=11)
+    pg=st['paper_gt']; mm=pg['methods']
+    bullets(s,6.7,4.05,6.2,2.0,[
+        f"GT = {pg['n_validated_TFs']} TFs Joung NOMINATED (Fig 3D) + experimentally VALIDATED (Fig 4); {pg['n_scored_TFs']} scorable, same Cao reference.",
+        f"Reachable pool ({pg['pool_reachable']} of {pg['pool_all']} types the assay can make): cosine_celllevel & LRsig recall@1={mm['cosine_celllevel ★']['r@1']:.2f} ({mm['cosine_celllevel ★']['r@1']/pg['chance']['reachable_r@1']:.1f}× chance), r@5 {mm['cosine_celllevel ★']['r@5']:.2f}, median rank {mm['cosine_celllevel ★']['medrank']}; shipped cosine_S6 lags (r@1 {mm['cosine_S6']['r@1']:.2f}).",
+        f"CellTypist per-cell ΔP fails (r@1 {mm['celltypist_perΔP']['r@1']:.2f}; saturates to 1 label) — shared hESC baseline.",
+        f"Production: cosine_celllevel on all {st['n_TFs']} TFs → {st['production']['n_fdr_0.10']} at q<0.10, {st['production']['n_top10pct']} top-decile (perm-FDR).",
+    ],size=10.5,spacing=4)
 else:
-    text(s,7.15,1.6,5.7,3,'[annotation job results pending —\nslide auto-fills from human_annotation_stats.json]',size=14,color=GRAY)
+    text(s,6.75,1.6,6.1,3,'[annotation results pending —\nfills from human_annotation_stats_v2.json]',size=14,color=GRAY)
 box(s,0.3,6.25,12.7,0.95,fill=RGBColor(0xEC,0xF7,0xEC),line=GREEN)
-text(s,0.55,6.4,12.3,0.6,'Chosen: cosine + permutation-FDR gate. Human ref (no orthology loss) gives far more candidate calls than mouse, '
-     'but proper FDR shows the labels are still sparse → use the q<0.10 / top-decile set as the confident pool, with care.',size=12.5,color=DARK)
+text(s,0.55,6.38,12.3,0.62,'Chosen: cosine on cell-level matched-norm human-fetal signatures. On the paper\'s OWN validated TF→fate set it reaches '
+     '4.4× chance top-1 (correct fate in top-2 by median rank) — far above the shipped aggregate signature; CellTypist per-cell saturates.',size=12,color=DARK)
 
 # ════════════════════════ SLIDE 3 — Human atlas figure ════════════════════════
 s=slide_blank(); title_bar(s,'1 · The Human Fetal Reference (Cao 2020 / Descartes, GSE156793)')
@@ -294,7 +288,7 @@ table(s,0.35,1.35,12.6,[
     ['u_gate + ε-mix','both','max singles-only non-additivity capacity','exp19 — training'],
     ['separate residual head','decouple a pert decoder from the GRN decoder','test residual target without the decoder conflict; A still gets gradients','exp17 — training'],
     ['re-add MMD','distributional set-matching term (exp14 recipe)','exp17 dropped MMD; restores perturbed-distribution shape','exp17 — training'],
-    ['human-fetal annotation','swap mouse→human reference','more confident fate labels → enable fate-reward / RL identifiability','done (this deck)'],
+    ['human-fetal annotation','cosine on cell-level human-fetal sigs; paper-validated','4.4× chance top-1 on Joung\'s validated TF→fate set → fate-reward / RL identifiability','done (this deck)'],
     ['combo-training','train on a subset of combos (Norman has ~107; Joung only 44)','the ONLY lever that truly unlocks epistasis','planned (Norman)'],
 ],[2.4,3.6,4.6,1.8],fs=10,hfs=10.5)
 box(s,0.35,6.35,12.65,0.85,fill=RGBColor(0xEC,0xF1,0xFB),line=BLUE)

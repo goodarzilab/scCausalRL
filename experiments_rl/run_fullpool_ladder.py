@@ -13,9 +13,7 @@ import torch
 import pandas as pd
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-from core.wm_loader import load_frozen_wm
-from core.wm_operator import WorldModelOperator
-from core.wm_data import WMData
+from core.setup_stack import add_stack_args, build_stack
 from core.baselines import Planners
 from core.validate import evaluate_planner
 from core.effect_clusters import EffectClusters
@@ -24,20 +22,19 @@ from rl0_mpc.mpc_planner import MPCPlanner
 
 def main():
     ap = argparse.ArgumentParser()
+    add_stack_args(ap)
     ap.add_argument('--beam', type=int, default=16)
     ap.add_argument('--n_dag', type=int, default=8)
     ap.add_argument('--alpha', type=float, default=1.0)
     ap.add_argument('--n_ctrl', type=int, default=300)
-    ap.add_argument('--pool', default='full', choices=['full', 'screened'])
+    ap.add_argument('--pool', default='full', choices=['full', 'screened', 'curated'])
     ap.add_argument('--output', default='rl0_mpc/results/fullpool')
     ap.add_argument('--device', default=None)
     args = ap.parse_args()
     os.makedirs(args.output, exist_ok=True)
     dev = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model, meta = load_frozen_wm(device=dev)
-    op = WorldModelOperator(model, meta, n_dag_samples=args.n_dag)
-    data = WMData(model, meta, op, n_ctrl_cells=args.n_ctrl)
+    model, meta, op, data = build_stack(args, dev, args.n_dag)
     data.set_pool(args.pool)
     planners = Planners(op, data)                          # batched precompute over the pool
     ec = EffectClusters(op, data, planners)                # posthoc effect modules (soft recall)

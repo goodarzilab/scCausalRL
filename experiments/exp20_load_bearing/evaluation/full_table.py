@@ -13,6 +13,8 @@ Run: python evaluation/full_table.py --device cpu
 import os, sys, glob, argparse, csv, numpy as np, torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import scipy.sparse as sp
+from scipy.stats import spearmanr
+from sklearn.metrics import roc_auc_score
 from evaluation.run_shift_eval_norman import load_shift_model
 from evaluation.heldout_zeroshot_eval import gene_space, _solve
 from data.load_joung import load_joung
@@ -58,15 +60,31 @@ def main():
     drift = np.stack([np.asarray(de[g], np.float32) for g in train0]).mean(0)
     print(f"[data] {len(train0)} train / {len(test0)} test TFs | drift ||{np.linalg.norm(drift):.2f}||", flush=True)
 
+    def _zr(M):
+        M = M - M.mean(1, keepdims=True); return M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
+
     def disc_pnk(pred, obs, genes, gidx):
-        g, _, _, _ = gene_space(pred - drift, obs - drift)
-        pr, ob = pred - drift, obs - drift; vals = []
+        # OLD metric: drift-removed cosine discrimination (per-TF frac of others beaten).
+        pr, ob = pred - drift, obs - drift
+        C = _zr(pr) @ _zr(ob).T; dgn = np.diag(C)[:, None]; T = len(genes)
+        disc_ps = (dgn > C).sum(1) / (T - 1) if T > 1 else np.full(T, np.nan)
+        pnk_dr, pnk_raw, degauroc, effspear = [], [], [], []   # drift-removed pnk + NEW magnitude metrics
         for k, gg in enumerate(genes):
             m = np.ones(pr.shape[1], bool)
-            if gg in gidx: m[gidx[gg]] = False
-            x, y = pr[k, m], ob[k, m]
-            if x.std() > 1e-9 and y.std() > 1e-9: vals.append(float(np.corrcoef(x, y)[0, 1]))
-        return g['discrimination_cos'], (float(np.mean(vals)) if vals else float('nan'))
+            if gg in gidx: m[gidx[gg]] = False                 # KO-excluded mask
+            xd, yd = pr[k, m], ob[k, m]                         # drift-removed, KO-excluded
+            pnk_dr.append(np.corrcoef(xd, yd)[0, 1] if xd.std() > 1e-9 and yd.std() > 1e-9 else np.nan)
+            p, o = pred[k, m], obs[k, m]                        # RAW (drift-in), KO-excluded → your Pnk
+            pnk_raw.append(np.corrcoef(p, o)[0, 1] if p.std() > 1e-9 and o.std() > 1e-9 else np.nan)
+            deg = (np.abs(obs[k]) > 0.15).astype(int)            # DEG recovery on full gene vector
+            degauroc.append(roc_auc_score(deg, np.abs(pred[k])) if 0 < deg.sum() < len(deg) else np.nan)
+            effspear.append(spearmanr(np.abs(pred[k]), np.abs(obs[k])).correlation)
+        pnk_dr, pnk_raw, degauroc, effspear = map(lambda a: np.array(a, float), (pnk_dr, pnk_raw, degauroc, effspear))
+        nm = lambda a: float(np.nanmean(a)) if np.isfinite(a).any() else float('nan')
+        sem = lambda a: float(np.nanstd(a, ddof=1) / np.sqrt(np.isfinite(a).sum())) if np.isfinite(a).sum() > 1 else 0.0
+        return dict(disc=float(disc_ps.mean()), disc_sem=sem(disc_ps),
+                    pnk_dr=nm(pnk_dr), pnk_raw=nm(pnk_raw), pnk_raw_sem=sem(pnk_raw),
+                    deg_auroc=nm(degauroc), deg_auroc_sem=sem(degauroc), eff_spear=nm(effspear))
 
     def c1(u, v):
         u = u - u.mean(); v = v - v.mean()
@@ -105,8 +123,8 @@ def main():
         tr_obs = np.stack([np.asarray(de[g], np.float32) for g in train])
         te_obs = np.stack([np.asarray(de[g], np.float32) for g in test])
         tr_pred, tr_sn = predict(train); te_pred, te_sn = predict(test)
-        tr_disc, tr_pnk = disc_pnk(tr_pred, tr_obs, train, gidx)
-        te_disc, te_pnk = disc_pnk(te_pred, te_obs, test, gidx)
+        TR = disc_pnk(tr_pred, tr_obs, train, gidx)
+        TE = disc_pnk(te_pred, te_obs, test, gidx)
 
         # A_gap on held-out TFs (per-TF A sampling, intervene_shift_mutilate; matches agap_probe/figure)
         gaps = []
@@ -121,16 +139,22 @@ def main():
             d0 = (model.decoder(zp0i) - model.decoder(zp0)).mean(0).cpu().numpy()
             model.dag.disabled = False
             gaps.append(1.0 - c1(dA, d0))
-        agap = float(np.mean(gaps))
+        agap = float(np.mean(gaps)); agap_sem = float(np.std(gaps, ddof=1) / np.sqrt(len(gaps))) if len(gaps) > 1 else 0.0
 
         row = dict(tag=tag, family=fam, dec=cfg.get('model', {}).get('decoder_type', 'linear'),
-                   latent=d, prior=lp, train_disc=tr_disc, test_disc=te_disc,
-                   disc_gap=tr_disc - te_disc, train_pnk=tr_pnk, test_pnk=te_pnk,
-                   A_gap=agap, Sratio=float(te_sn.mean() / (tr_sn.mean() + 1e-9)))
+                   latent=d, prior=lp,
+                   train_disc=TR['disc'], test_disc=TE['disc'], test_disc_sem=TE['disc_sem'],
+                   disc_gap=TR['disc'] - TE['disc'],
+                   test_pnk_driftrm=TE['pnk_dr'],                          # OLD drift-removed KO-excl pearson
+                   test_Pnk=TE['pnk_raw'], test_Pnk_sem=TE['pnk_raw_sem'],  # NEW: raw KO-excl pearson (your Pnk)
+                   test_deg_auroc=TE['deg_auroc'], test_deg_auroc_sem=TE['deg_auroc_sem'],
+                   test_eff_spear=TE['eff_spear'],
+                   train_Pnk=TR['pnk_raw'], train_deg_auroc=TR['deg_auroc'],
+                   A_gap=agap, A_gap_sem=agap_sem,
+                   Sratio=float(te_sn.mean() / (tr_sn.mean() + 1e-9)))
         rows.append(row)
-        print(f"  {tag:34s} {fam:10s} L{d:<4d} prior={lp}  "
-              f"train_disc={tr_disc:.3f} test_disc={te_disc:.3f} gap={tr_disc-te_disc:+.3f} "
-              f"A_gap={agap:.3f} test_pnk={te_pnk:.3f}", flush=True)
+        print(f"  {tag:32s} {fam:10s} L{d:<4d} disc={TE['disc']:.3f} Pnk={TE['pnk_raw']:.3f} "
+              f"deg_auroc={TE['deg_auroc']:.3f} eff_spear={TE['eff_spear']:.3f} A_gap={agap:.3f}", flush=True)
 
     rows.sort(key=lambda r: -r['test_disc'])
     out = 'results/figures/full_eval_table.csv'; os.makedirs('results/figures', exist_ok=True)

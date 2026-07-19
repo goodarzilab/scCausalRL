@@ -570,6 +570,13 @@ def perturbation_set_loss_shift_mutilate(
     project_shared=False,     # project the shared DIRECTION (drift/‖drift‖) out of the pred−target error
                               # before MSE — the loss rewards only the TF-specific (shared-orthogonal)
                               # component (Gram-Schmidt f_θ ⊥ shared). Lever B (shared handling).
+    pert_deg_mse_weight=0.0,  # exp20 lb9deg (#1 fix): weight on the drift-removed, DEG-masked,
+                              # magnitude-preserving MSE on the TF-specific residual. Default 0.0 →
+                              # every existing arm is byte-for-byte unchanged.
+    pert_deg_mse_thr=0.1,     # |observed residual| threshold defining the per-(sentence, gene) DEG mask
+    interaction_l2_weight=0.0,  # L2 penalty on the Option-C interaction head output ‖S_int‖² (combo
+                              # sentences only; 0 for singles). Curbs the ~2× epistasis-magnitude
+                              # overshoot (‖ε_model‖/‖ε_obs‖) while leaving the epistasis DIRECTION free.
 ):
     """Shift-FED MUTILATION set loss (Tier-2): the shift defines the latent target,
     the do-operator (column-mutilated SCM) propagates it.
@@ -606,6 +613,11 @@ def perturbation_set_loss_shift_mutilate(
     gi_c = gene_idx.clamp(min=0)
     S_per = model.compute_shift(gi_c)                                  # [B, K, d]
     S_shift = (S_per * gmask.unsqueeze(-1)).sum(1)                     # [B, d]  (1 gene single, 2 combo)
+    interaction_l2_term = torch.zeros((), device=device)
+    if getattr(model, 'interaction_U', None) is not None:              # Option C: +S_int (0 for singles)
+        S_int = model.compute_interaction(gi_c, gene_mask=gmask)
+        S_shift = S_shift + S_int
+        interaction_l2_term = (S_int ** 2).sum(-1).mean()             # mean_sentences ‖S_int‖² (0 on singles)
     if pseudobulk_targets is not None:
         # Lever A: per-TF population mean (high SNR) instead of the per-sentence ~64-cell mean.
         # Singles: one gene per sentence (gi_c[:,0]); combos sum the per-TF means over the set.
@@ -615,9 +627,12 @@ def perturbation_set_loss_shift_mutilate(
     if residual_target and drift is not None:
         dx_all = dx_all - drift.view(1, -1)                            # train on TF-specific residual
 
-    # per-sentence intervention strength u  [B, d] (single OR summed-over-combo)
+    # per-sentence intervention strength u  [B, d]. For 'shift' mode use the PER-SINGLE MEAN of
+    # clip(β|S_g|) over the set's genes (NOT clip(β|Σ S_g|)): the |Σ| form over-clamps combos and
+    # detaches A. Identical for singles (gmask sums to 1). Keeps S_shift (injected shift) summed.
     if u_mode == 'shift':
-        u = (shift_beta * S_shift.abs()).clamp(max=1.0)               # [B, d]
+        u_each = (shift_beta * S_per.abs()).clamp(max=1.0)            # [B, K, d]
+        u = (u_each * gmask.unsqueeze(-1)).sum(1) / gmask.sum(1, keepdim=True).clamp(min=1.0)  # [B, d]
     elif u_mode == 'loading':
         L_g = model.get_loadings()[gi_c]                              # [B, K, d]
         u = (L_g * gmask.unsqueeze(-1)).sum(1).clamp(0.0, u_clip_max) # [B, d]  (Σ loadings over combo)
@@ -690,6 +705,24 @@ def perturbation_set_loss_shift_mutilate(
         # whiten per gene: divide by the target's per-gene std → reward residual DIRECTION not magnitude.
         err = err / target_whiten.view(1, 1, -1).clamp_min(1e-3)
     mse_term = err.pow(2).mean()
+
+    # exp20 lb9deg (#1 fix): DRIFT-REMOVED, DEG-MASKED, MAGNITUDE-PRESERVING MSE on the TF-specific
+    # residual. Nothing else in the loss rewards getting the drift-removed DE-gene response RIGHT:
+    # the raw-Δ MSE above is ~95% shared drift, and the InfoNCE contrastive is a scale-free cosine
+    # gameable by bulk genes. Here we (1) subtract the shared drift from BOTH pred and target,
+    # (2) mask to the genes that actually move in the OBSERVED residual (|res_obs| > thr), and
+    # (3) take an UNWHITENED (magnitude-preserving) squared error — whitening collapsed to chance
+    # historically, so DO NOT normalize. residual_target handling: delta_pred is the RAW predicted Δ
+    # (decoded x_hat_post − x_hat_prev), so the drift-removed prediction is ALWAYS delta_pred − drift;
+    # the observed residual is dx_all when residual_target already subtracted drift (line ~617), else
+    # dx_all − drift — this way we never subtract drift twice.
+    deg_mse_term = torch.zeros((), device=device)
+    if pert_deg_mse_weight > 0 and drift is not None:
+        res_pred = delta_pred - drift.view(1, 1, -1)                   # [N, B, G] drift-removed prediction
+        res_obs = dx_all if residual_target else (dx_all - drift.view(1, -1))  # [B, G] drift-removed target
+        deg = (res_obs.abs() > pert_deg_mse_thr)                       # [B, G] genes that move in the residual
+        deg_err = (res_pred - res_obs.unsqueeze(0)) * deg.unsqueeze(0)  # [N, B, G] zero outside the DEG mask
+        deg_mse_term = deg_err.pow(2).sum() / deg.unsqueeze(0).expand_as(deg_err).sum().clamp(min=1)
 
     # DAG-UTILIZATION: predict the SAME Δ with A=0 (the decoder+shift bypass). With A=0 the
     # SCM is identity: z_prev0=ε, z_target0=ε+S, ε̃0=mix_eps(...), z_post0=ε̃0 (no solves).
@@ -778,17 +811,21 @@ def perturbation_set_loss_shift_mutilate(
     loss = (mse_weight * mse_term + mmd_weight * mmd_term
             + energy_weight * energy_term + shift_l1_weight * shift_l1_term
             + contrastive_weight * contrastive_term + ident_weight * ident_term
-            + dag_util_weight * dag_util_term + target_l0_weight * target_l0_term)
+            + dag_util_weight * dag_util_term + target_l0_weight * target_l0_term
+            + pert_deg_mse_weight * deg_mse_term
+            + interaction_l2_weight * interaction_l2_term)
 
     with torch.no_grad():
         diagnostics = {
             'loss': float(loss.item()), 'mse_term': float(mse_term.item()),
+            'deg_mse_term': float(deg_mse_term.item()) if pert_deg_mse_weight > 0 else 0.0,
             'mmd_term': float(mmd_term.item()) if mmd_weight > 0 else 0.0,
             'energy_term': float(energy_term.item()) if energy_weight > 0 else 0.0,
             'contrastive_term': float(contrastive_term.item()) if contrastive_weight > 0 else 0.0,
             'ident_term': float(ident_term.item()) if ident_weight > 0 else 0.0,
             'dag_util_term': float(dag_util_term.item()) if dag_util_weight > 0 else 0.0,
             'target_l0_term': float(target_l0_term.item()) if target_l0_weight > 0 else 0.0,
+            'interaction_l2_term': float(interaction_l2_term.item()) if interaction_l2_weight > 0 else 0.0,
             'gate_open_frac': (float(model.compute_gate_prob(gi_c).mean().item())
                                if getattr(model, 'use_target_gate', False) else 1.0),
             'shift_l1_term': float(shift_l1_term.item()),

@@ -34,7 +34,8 @@ class CausalVAE(nn.Module):
                  pert_intervene_mode='legacy', use_target_gate=False,
                  target_gate_tau=1.0, target_gate_bias_init=3.0,
                  frozen_decoder_weight=None, scm_nonlinear=False, n_picard=40,
-                 scm_solve_ridge=0.0, decoder_mask=None, decoder_mask_freeze=False):
+                 scm_solve_ridge=0.0, decoder_mask=None, decoder_mask_freeze=False,
+                 interaction_rank=0):
         super().__init__()
         # exp20 load-bearing-A fixes:
         #  pert_intervene_mode='structural' → single mutilated solve z_post=(I−diag(1−u)Aᵀ)⁻¹(ε+S),
@@ -160,6 +161,17 @@ class CausalVAE(nn.Module):
         else:
             self.shift_encoder = None
             self.shift_scale = None
+        # Option C — low-rank symmetric interaction head: a PAIR-specific latent shift S_int, injected
+        # PRE-SOLVE so it propagates through A (A stays load-bearing; it spreads the interaction
+        # downstream). Zero for a single gene, zero-init output → starts at the additive prediction and
+        # learns only the deviation. Trains ONLY on combo sentences (needs ≥2 genes).
+        self.interaction_rank = int(interaction_rank)
+        if self.interaction_rank > 0:
+            self.interaction_U = nn.Linear(self.shift_label_dim, self.interaction_rank, bias=False)
+            self.interaction_out = nn.Linear(self.interaction_rank, latent_dim, bias=False)
+            nn.init.zeros_(self.interaction_out.weight)          # start additive (S_int = 0)
+        else:
+            self.interaction_U = self.interaction_out = None
 
         # Cache for gene-to-latent mapping
         self._gene_to_latent_cache = None
@@ -195,10 +207,35 @@ class CausalVAE(nn.Module):
         self.pert_label.copy_(labels.to(self.pert_label.device))
         self._pert_label_set = True
 
-    def compute_shift(self, gene_idx):
+    def _retrieve_joint(self, gene_idx, gene_mask=None):
+        """Combo-aware retrieval: ONE softmax over the JOINT query Σ_g proj(e_g) for the whole SET,
+        self-masking ALL set genes. Non-additive in the set (softmax nonlinearity); reduces to
+        _retrieve for a single gene. gene_idx: [K] or [B,K]; gene_mask: [B,K] (1 valid / 0 pad)."""
+        if getattr(self, 'retr_val', None) is None:
+            return None
+        gi = torch.as_tensor(gene_idx, dtype=torch.long, device=self.pert_label.device)
+        squeeze = gi.dim() == 1
+        if squeeze: gi = gi.unsqueeze(0)                                   # [B, K]
+        lab = self.pert_label[gi]                                         # [B, K, L]
+        if gene_mask is not None: lab = lab * gene_mask.to(lab.dtype).unsqueeze(-1)
+        q = self.retr_proj(lab.sum(dim=1))                                # [B, key_dim]  joint query
+        Kp = self.retr_proj(self.retr_key)                                # [N_tr, key_dim]
+        scores = (q @ Kp.t()) / (self.retr_proj.out_features ** 0.5 * self.retr_tau)  # [B, N_tr]
+        setmask = (gi.unsqueeze(-1) == self.retr_gene.view(1, 1, -1))     # [B, K, N_tr]
+        if gene_mask is not None: setmask = setmask & (gene_mask.unsqueeze(-1) > 0)
+        scores = scores.masked_fill(setmask.any(dim=1), float('-inf'))    # exclude every set gene
+        if self.retr_k < scores.shape[-1]:
+            kth = scores.topk(self.retr_k, dim=-1).values[..., -1:]
+            scores = scores.masked_fill(scores < kth, float('-inf'))
+        r = torch.softmax(scores, dim=-1) @ self.retr_val                 # [B, d]
+        return r.squeeze(0) if squeeze else r
+
+    def compute_shift(self, gene_idx, add_retrieval=True):
         """Latent program shift S^p = c · ShiftEncoder(pert_label[gene_idx]).
 
         gene_idx: LongTensor[...] of perturbed gene indices.
+        add_retrieval: include the per-gene retrieval term (set False when a caller adds a JOINT
+                       combo retrieval separately via _retrieve_joint, to avoid double-counting).
         Returns:  Tensor[..., latent_dim] — the scaled additive latent shift.
         """
         if self.shift_encoder is None:
@@ -208,7 +245,7 @@ class CausalVAE(nn.Module):
         shift = self.shift_encoder(label)                 # [..., d] raw magnitude head
         # Retrieval augmentation: blend in an ESM-similarity-weighted shift retrieved from a TRAIN-only
         # memory (self-excluded, top-k). Leakage-safe: DB = train TFs, query's own row masked.
-        if getattr(self, 'retr_val', None) is not None:
+        if add_retrieval and getattr(self, 'retr_val', None) is not None:
             shift = shift + self.retr_alpha * self._retrieve(label, gi)
         # Fix 2: sparse per-TF target gate (ones when use_target_gate=False → identical to legacy).
         # Single choke point — every S-producer routes through compute_shift, so S is gated everywhere.
@@ -281,6 +318,19 @@ class CausalVAE(nn.Module):
             eps_tilde = eps_tilde + torch.tanh(self.eps_mix_net(shift))
         return eps_tilde
 
+    def compute_interaction(self, gene_idx, gene_mask=None):
+        """Option-C latent interaction shift S_int for a SET of genes (0 if single gene / head off).
+        Symmetric low-rank: x_g = U(e_g); S_int = W_out( Σ_{i<j} x_i⊙x_j ) = W_out( ((Σx)²−Σx²)/2 ).
+        gene_idx: [...,K]; gene_mask: [...,K] float (1 valid / 0 pad) to ignore padded combo slots."""
+        if self.interaction_U is None:
+            return None
+        gi = torch.as_tensor(gene_idx, dtype=torch.long, device=self.pert_label.device)
+        x = self.interaction_U(self.pert_label[gi])                  # [..., K, rank]
+        if gene_mask is not None:
+            x = x * gene_mask.to(x.dtype).unsqueeze(-1)
+        sx = x.sum(dim=-2); sq = (x * x).sum(dim=-2)                 # over the K (gene) axis
+        return self.interaction_out(0.5 * (sx * sx - sq))           # [..., d]
+
     def intervene_shift_mutilate(self, epsilon, gene_indices, A, z_prev,
                                  u_mode='loading', u_clip_max=0.5, shift_beta=1.0):
         """Shift-fed mutilation do-operator (Tier-2), for single or combo perturbations.
@@ -303,11 +353,16 @@ class CausalVAE(nn.Module):
         Returns: (z_post Tensor[B, d], u Tensor[d])
         """
         gi = torch.as_tensor(gene_indices, dtype=torch.long, device=epsilon.device).reshape(-1)
-        S = self.compute_shift(gi).sum(dim=0)                        # [d] — summed (gated) shift
+        S_each = self.compute_shift(gi)                              # [k, d] per-gene gated shifts
+        S = S_each.sum(dim=0)                                        # [d] — summed shift (injected into ε̃)
+        if self.interaction_U is not None:
+            S = S + self.compute_interaction(gi)                     # +S_int (Option C; 0 for a single gene)
         d = self.latent_dim
-        # per-program intervention strength u (SET semantics: sum over the genes)
+        # per-program intervention strength u. For 'shift' mode use the PER-SINGLE MEAN of clip(β|S_g|)
+        # rather than clip(β|Σ S_g|): the |Σ| form over-clamps combos (~41% of programs saturate to
+        # u=1), detaching A and degrading combo prediction. Mean is IDENTICAL for a single gene (k=1).
         if u_mode == 'shift':
-            u = (shift_beta * S.abs()).clamp(max=1.0)                # [d]  (S already summed)
+            u = (shift_beta * S_each.abs()).clamp(max=1.0).mean(dim=0)   # [d]
         elif u_mode == 'loading':
             u = self.get_loadings()[gi].sum(dim=0).clamp(0.0, u_clip_max)  # [k,d]→[d]
         else:

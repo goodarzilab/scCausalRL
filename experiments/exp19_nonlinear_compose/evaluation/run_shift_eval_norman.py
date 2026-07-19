@@ -52,6 +52,13 @@ def load_shift_model(checkpoint_path, device):
     n_genes = len(gene_names)
     n_batches = int(sd['encoder.batch_emb.weight'].shape[0]) if 'encoder.batch_emb.weight' in sd else 0
     n_modalities = int(sd['encoder.modality_emb.weight'].shape[0]) if 'encoder.modality_emb.weight' in sd else 0
+    # SENA-δ encoder reload: detect from the saved masked layer, infer K, hand a
+    # zero placeholder mask (the real one is a persistent buffer restored by load_state_dict).
+    encoder_type = cfg_m.get('encoder_type', 'sena' if 'encoder.W' in sd else 'mlp')
+    sena_mask = None
+    if encoder_type == 'sena':
+        K = int(sd['encoder.W'].shape[1])
+        sena_mask = torch.zeros(n_genes, K)
     model = CausalVAE(
         n_genes=n_genes, latent_dim=cfg_m['latent_dim'],
         tau_init=cfg_m.get('tau_min', cfg_m.get('tau_init', 1.0)),
@@ -72,6 +79,11 @@ def load_shift_model(checkpoint_path, device):
         u_gate_mlp=bool(cfg_m.get('u_gate_mlp', False)),
         nonlinear_eps_mix=bool(cfg_m.get('nonlinear_eps_mix', False)),
         gate_hidden=int(cfg_m.get('gate_hidden', 256)),
+        u_gate_pure=bool(cfg_m.get('u_gate_pure', False)),
+        dag_disabled=bool(cfg_m.get('dag_disabled', False)),
+        encoder_type=encoder_type,
+        sena_mask=sena_mask,
+        sena_activation=cfg_m.get('sena_activation', 'tanh'),
     ).to(device)
     model.load_state_dict(sd)
     model.eval()

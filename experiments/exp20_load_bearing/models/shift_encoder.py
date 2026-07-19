@@ -56,6 +56,14 @@ class ShiftEncoder(nn.Module):
         self.latent_dim = latent_dim
         self.output_activation = output_activation
 
+        # ── Generalization knob: ESM-noise augmentation (default 0.0 → exact no-op) ──
+        # During TRAINING ONLY, additive Gaussian noise on the (ESM) label input before it
+        # is mapped to a shift. Regularizes the ESM→shift map toward local smoothness (nearby
+        # ESM embeddings → nearby shifts) to curb memorization of the train TFs. Set from
+        # train_vae.py via p1['esm_noise_std']. Guarded by self.training in forward → true
+        # no-op at eval (model.eval()) and when std==0.
+        self.esm_noise_std = 0.0
+
         layers = []
         in_dim = label_dim
         for _ in range(max(n_layers, 1)):
@@ -87,6 +95,10 @@ class ShiftEncoder(nn.Module):
 
     def forward(self, label):
         """label: Tensor[..., label_dim] → RAW shift Tensor[..., latent_dim] (ungated)."""
+        # ESM-noise augmentation (train-only, no-op when std==0): perturb the input embedding
+        # so nearby ESM embeddings are forced to map to nearby shifts (local smoothness).
+        if self.training and getattr(self, 'esm_noise_std', 0.0) > 0:
+            label = label + torch.randn_like(label) * self.esm_noise_std
         h = self.net(label)
         s = self.out(h)
         if self.output_activation == 'softmax':

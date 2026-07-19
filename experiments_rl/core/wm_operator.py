@@ -113,10 +113,15 @@ class WorldModelOperator:
         S -> u (shift mode) -> refine_u (gate) -> mix_eps (eps correction) -> mutilated
         solve. epsilon [B,d], returns (z_post [B,d], u [d])."""
         gi = torch.as_tensor(gene_set, dtype=torch.long, device=epsilon.device).reshape(-1)
-        S = self.model.compute_shift(gi).sum(dim=0)                      # [d] (gated in exp20)
+        S_each = self.model.compute_shift(gi)                            # [k, d] per-gene gated shifts
+        S = S_each.sum(dim=0)                                            # [d] summed shift
+        if getattr(self.model, 'interaction_U', None) is not None:
+            S = S + self.model.compute_interaction(gi)                   # +Option-C interaction (C1; 0 for a single)
         d = self.d
         if self.u_mode == 'shift':
-            u = (self.shift_beta * S.abs()).clamp(max=1.0)              # [d]
+            # C1: per-single MEAN of clip(β|S_g|), matching intervene_shift_mutilate — NOT clip(β|ΣS_g|),
+            # which over-clamps combos (~41% programs saturate) and degrades combo prediction.
+            u = (self.shift_beta * S_each.abs()).clamp(max=1.0).mean(dim=0)   # [d]
         else:
             u = self.model.get_loadings()[gi].sum(dim=0).clamp(0.0, self.u_clip_max)
         u = self.model.refine_u(u, S)                                   # nonlinear gate (no-op in exp20 struct arms)
@@ -200,4 +205,52 @@ class WorldModelOperator:
         Mrow = (1.0 - u)                                           # [K, d]
         LHS = I.unsqueeze(0) - Mrow.unsqueeze(2) * A.T.unsqueeze(0)   # [K, d, d]
         z_post = torch.linalg.solve(LHS, eps_tilde.unsqueeze(2)).squeeze(2)  # [K, d]
+        return torch.clamp(z_post, -20.0, 20.0)
+
+    @torch.no_grad()
+    def apply_sets(self, eps0, sets, A):
+        """C1 — CORRECT batched do_mean for K explicit gene SETS (variable k). Unlike apply_many
+        (which takes a pre-summed S_batch, uses the |ΣS_g| u-form, and drops the interaction head),
+        this reproduces `model.intervene_shift_mutilate` EXACTLY, batched:
+            S     = Σ_g compute_shift(g) + compute_interaction(set)      (Option-C head folded in)
+            u     = mean_g clip(β|S_g|)                                  (per-single mean, NOT clip(β|ΣS_g|))
+        then the same mutilated structural/nonlinear solve. Use this whenever combo scoring must match
+        the validated combo eval. eps0 [d]; sets: list[list[int]] (len K); A [d,d]  ->  z_post [K, d].
+        """
+        d = self.d; dev = eps0.device; dt = eps0.dtype
+        has_head = getattr(self.model, 'interaction_U', None) is not None
+        struct = getattr(self.model, 'pert_intervene_mode', 'legacy') == 'structural'
+        S_rows, u_rows = [], []
+        for s in sets:
+            gi = torch.as_tensor(list(s), dtype=torch.long, device=dev).reshape(-1)
+            S_each = self.model.compute_shift(gi)                          # [k, d]
+            S = S_each.sum(0)
+            if has_head:
+                S = S + self.model.compute_interaction(gi)                 # +S_int (0 for a single)
+            if self.u_mode == 'shift':
+                u = (self.shift_beta * S_each.abs()).clamp(max=1.0).mean(0)   # per-single mean
+            else:
+                u = self.model.get_loadings()[gi].sum(0).clamp(0.0, self.u_clip_max)
+            S_rows.append(S); u_rows.append(u)
+        S_batch = torch.stack(S_rows); u = torch.stack(u_rows)            # [K, d]
+        if self.gate_aware:
+            u = self.model.refine_u(u, S_batch)
+        I = torch.eye(d, device=dev, dtype=dt)
+        # nonlinear SCM (Picard), structural
+        if getattr(self.model.dag, 'scm_nonlinear', False) and struct:
+            eps_tilde = eps0.unsqueeze(0) + S_batch; omu = (1.0 - u); z = eps_tilde
+            for _ in range(getattr(self.model.dag, 'n_picard', 40)):
+                z = omu * torch.tanh(z @ A) + eps_tilde
+            return torch.clamp(z, -20.0, 20.0)
+        # linear SCM
+        if struct:
+            eps_tilde = eps0.unsqueeze(0) + S_batch                       # [K, d]
+        else:
+            IA = I - A.T
+            z_prev = torch.linalg.solve(IA, eps0)
+            z_target = z_prev.unsqueeze(0) + torch.linalg.solve(IA, S_batch.T).T
+            eps_tilde = u * z_target + (1.0 - u) * eps0.unsqueeze(0)
+        Mrow = (1.0 - u)
+        LHS = I.unsqueeze(0) - Mrow.unsqueeze(2) * A.T.unsqueeze(0)       # [K, d, d]
+        z_post = torch.linalg.solve(LHS, eps_tilde.unsqueeze(2)).squeeze(2)
         return torch.clamp(z_post, -20.0, 20.0)

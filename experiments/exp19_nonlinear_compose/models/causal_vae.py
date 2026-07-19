@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from .encoder import CausalEncoder
+from .encoder import CausalEncoder, SENAEncoder
 from .decoder import LinearDecoder, MLPDecoder
 from .dag import DAGModule, _robust_solve
 from .shift_encoder import ShiftEncoder
@@ -28,7 +28,9 @@ class CausalVAE(nn.Module):
                  shift_scale_init=1.0,
                  separate_pert_decoder=False, pert_decoder_type='linear',
                  pert_decoder_hidden=1024, pert_decoder_layers=2,
-                 u_gate_mlp=False, nonlinear_eps_mix=False, gate_hidden=256):
+                 u_gate_mlp=False, nonlinear_eps_mix=False, gate_hidden=256, u_gate_pure=False,
+                 dag_disabled=False,
+                 encoder_type='mlp', sena_mask=None, sena_activation='tanh'):
         super().__init__()
         self.n_genes = n_genes
         self.latent_dim = latent_dim
@@ -42,10 +44,21 @@ class CausalVAE(nn.Module):
         self.decoder_type = decoder_type
         self.use_shift_encoder = bool(use_shift_encoder)
 
-        self.encoder = CausalEncoder(input_dim=n_genes, latent_dim=latent_dim,
-                                     n_modalities=n_modalities,
-                                     n_batches=n_batches)
-        self.dag = DAGModule(d=latent_dim, tau=tau_init, dagma_s=dagma_s)
+        self.encoder_type = encoder_type
+        if encoder_type == 'sena':
+            # SENA-δ masked gene→pathway encoder. sena_mask is [n_genes, K] (member=1,
+            # non-member=leak λ). Anchors latent programs to GO:BP processes → breaks the
+            # encoder/decoder rotational symmetry that made A non-load-bearing.
+            if sena_mask is None:
+                raise ValueError("encoder_type='sena' requires sena_mask [n_genes, K]")
+            self.encoder = SENAEncoder(input_dim=n_genes, latent_dim=latent_dim,
+                                       mask=sena_mask, activation=sena_activation,
+                                       n_modalities=n_modalities, n_batches=n_batches)
+        else:
+            self.encoder = CausalEncoder(input_dim=n_genes, latent_dim=latent_dim,
+                                         n_modalities=n_modalities,
+                                         n_batches=n_batches)
+        self.dag = DAGModule(d=latent_dim, tau=tau_init, dagma_s=dagma_s, disabled=dag_disabled)
         if decoder_type == 'mlp':
             self.decoder = MLPDecoder(latent_dim=latent_dim, output_dim=n_genes,
                                       hidden=decoder_hidden, n_layers=decoder_layers)
@@ -74,6 +87,7 @@ class CausalVAE(nn.Module):
         # unlike residual_target). A single TF's shift is already multi-program, so these get
         # real gradient from singles and yield non-additive combos as an emergent consequence.
         self.u_gate_mlp = bool(u_gate_mlp)
+        self.u_gate_pure = bool(u_gate_pure)   # u = sigmoid(MLP(S)) directly, not β|S| + tanh(MLP(S))
         self.nonlinear_eps_mix = bool(nonlinear_eps_mix)
         if self.u_gate_mlp:
             self.u_gate = nn.Sequential(nn.Linear(latent_dim, gate_hidden), nn.ReLU(),
@@ -163,6 +177,10 @@ class CausalVAE(nn.Module):
         zero-init so it starts at u_base and learns set-dependent (non-additive) gating."""
         if self.u_gate is None:
             return u_base
+        if self.u_gate_pure:
+            # u-score comes ENTIRELY from the gate: u = sigmoid(MLP(S)). Zero-init final layer →
+            # u≡0.5 at start (non-degenerate), then learns the per-program clamp from S. Ignores β|S|.
+            return torch.sigmoid(self.u_gate(S)).clamp(0.0, 1.0)
         return (u_base + torch.tanh(self.u_gate(S))).clamp(0.0, 1.0)
 
     def mix_eps(self, eps_ctrl, z_target, u):

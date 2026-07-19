@@ -1,0 +1,31 @@
+{
+  "n_tfs": 1069,
+  "n_fates": 20,
+  "n_train": 855,
+  "reps": {
+    "OBSERVED \u0394-resid (data ceiling)": {
+      "knn_top1": 0.07009345794392523,
+      "logreg_top1": 0.1308411214953271,
+      "maj_chance": 0.102803738317757,
+      "knn_top1_highconf": 0.09090909090909091,
+      "logreg_top1_highconf": 0.22727272727272727,
+      "n_test": 214
+    },
+    "ESM emb (input ceiling)": {
+      "knn_top1": 0.0794392523364486,
+      "logreg_top1": 0.06542056074766354,
+      "maj_chance": 0.102803738317757,
+      "knn_top1_highconf": 0.18181818181818182,
+      "logreg_top1_highconf": 0.09090909090909091,
+      "n_test": 214
+    },
+    "WM-pred \u0394-resid (current)": {
+      "knn_top1": 0.0514018691588785,
+      "logreg_top1": 0.06074766355140187,
+      "maj_chance": 0.102803738317757,
+      "knn_top1_highconf": 0.09090909090909091,
+      "logreg_top1_highconf": 0.09090909090909091,
+      "n_test": 214
+    }
+  }
+}

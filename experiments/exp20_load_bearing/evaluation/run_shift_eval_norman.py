@@ -97,6 +97,7 @@ def load_shift_model(checkpoint_path, device):
         scm_solve_ridge=float(cfg_m.get("scm_solve_ridge", 0.0)),
         decoder_mask=decoder_mask,
         decoder_mask_freeze=bool(cfg_m.get('dec_mask_freeze', False)),
+        interaction_rank=int(cfg_m.get('interaction_rank', 0)),
     ).to(device)
     # retrieval memory: register placeholders (train-only DB) sized from the state dict so load restores
     if 'retr_val' in sd:

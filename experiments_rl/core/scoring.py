@@ -11,6 +11,19 @@ import numpy as np
 import torch
 
 
+class Lineage:
+    """Fate-target key: a developmental lineage (Leiden cluster) whose target is the
+    residual-centroid of its driver TFs, NOT a single perturbation. Distinguishes the
+    fate-reach task from the gene/combo reach task in observed_de / target_for."""
+    __slots__ = ('name',)
+
+    def __init__(self, name):
+        self.name = str(name)
+
+    def __repr__(self):
+        return f"Lineage({self.name})"
+
+
 def torch_match(pred_rows, o_t, sel_idx):
     """Signed Pearson per row of pred_rows[:, sel_idx] vs o_t (all torch, on-device).
     pred_rows [K, n_genes]; o_t [S]; sel_idx [S]. Returns [K]."""
@@ -22,8 +35,12 @@ def torch_match(pred_rows, o_t, sel_idx):
 
 
 def observed_de(data, target_key):
-    """Return (observed lfc [n_genes], DEG-eval mask [n_genes]) for a single/combo.
-    The mask excludes the perturbed gene(s) themselves."""
+    """Return (observed lfc [n_genes], DEG-eval mask [n_genes]) for a single/combo/lineage.
+    The mask excludes the perturbed gene(s) themselves; a Lineage fate target excludes none
+    (its target is a fate centroid, not a perturbation, so there is no driver gene to mask)."""
+    if isinstance(target_key, Lineage):
+        return np.asarray(data.de_lineage[target_key.name]['lfc'], dtype=np.float32), \
+            np.ones(len(data.gene_names), bool)
     de = data.de_combo[target_key] if isinstance(target_key, tuple) else data.de_single[target_key]
     keys = target_key if isinstance(target_key, tuple) else (target_key,)
     mask = np.ones(len(data.gene_names), bool)

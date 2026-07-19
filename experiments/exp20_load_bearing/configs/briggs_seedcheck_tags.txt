@@ -1,0 +1,17 @@
+# winner + its other seed
+v2b_deg3_t25_frozen_r32_s1
+v2b_deg3_t25_frozen_r32_s7
+# deg sweep seed pairs (frozen head)
+v2b_deg5_frozen_r32_s1
+v2b_deg5_frozen_r32_s7
+v2b_deg8_frozen_r32_s1
+v2b_deg8_frozen_r32_s7
+# non-frozen deg seed pairs
+v2b_mmd1_deg3_t25_s1
+v2b_mmd1_deg3_t25_s7
+v2b_mmd1_deg2_s1
+v2b_mmd1_deg2_s7
+v2b_mmd1_deg5_s1
+v2b_mmd1_deg5_s7
+v2b_mmd1_deg8_s1
+v2b_mmd1_deg8_s7

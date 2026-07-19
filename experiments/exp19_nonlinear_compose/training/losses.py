@@ -557,6 +557,11 @@ def perturbation_set_loss_shift_mutilate(
     contrastive_temp=0.2,
     drift=None,               # [G] shared across-TF mean Δ (the differentiation program)
     residual_target=False,    # train the shift to predict Δ − drift (the TF-specific residual)
+    fate_labels=None,         # [n_genes] int fate id (-1 = unannotated): identifiability reg
+    ident_weight=0.0,         # supervised-contrastive-by-fate on the shift (structure latent by fate)
+    ident_temp=0.2,
+    dag_util_weight=0.0,      # DAG-utilization: penalize when A=0 predicts the Δ as well as A
+    dag_util_margin=0.0,      # require the A-path to beat the no-A path by this MSE margin
 ):
     """Shift-FED MUTILATION set loss (Tier-2): the shift defines the latent target,
     the do-operator (column-mutilated SCM) propagates it.
@@ -640,6 +645,20 @@ def perturbation_set_loss_shift_mutilate(
     delta_pred = (x_hat_post - x_hat_prev).mean(dim=2)                 # [N, B, G]
     mse_term = (delta_pred - dx_all[None, :, :]).pow(2).mean()
 
+    # DAG-UTILIZATION: predict the SAME Δ with A=0 (the decoder+shift bypass). With A=0 the
+    # SCM is identity: z_prev0=ε, z_target0=ε+S, ε̃0=mix_eps(...), z_post0=ε̃0 (no solves).
+    # Penalize relu(mse_with_A − mse_without_A + margin) so the A-path MUST beat the bypass →
+    # forces the prediction to flow THROUGH the latent DAG instead of around it via the decoder.
+    dag_util_term = torch.zeros((), device=device)
+    if dag_util_weight > 0:
+        z_prev0 = eps_ctrl_set                                          # [B, S, d]
+        z_target0 = eps_ctrl_set + S_shift.unsqueeze(1)                 # [B, S, d]
+        eps_tilde0 = model.mix_eps(eps_ctrl_set, z_target0, u.unsqueeze(1))  # [B, S, d]
+        dp0 = (pert_dec(eps_tilde0.reshape(-1, d)).reshape(B, S, G)
+               - pert_dec(z_prev0.reshape(-1, d)).reshape(B, S, G)).mean(dim=1)   # [B, G]
+        mse_term0 = (dp0 - dx_all).pow(2).mean()
+        dag_util_term = torch.relu(mse_term - mse_term0 + dag_util_margin)
+
     # InfoNCE contrastive: each TF's predicted Δ must retrieve its OWN observed Δ over the
     # batch's other TFs — directly trains the discrimination the baseline collapses on.
     contrastive_term = torch.zeros((), device=device)
@@ -677,10 +696,31 @@ def perturbation_set_loss_shift_mutilate(
         if mmd_vals: mmd_term = torch.stack(mmd_vals).mean()
         if energy_vals: energy_term = torch.stack(energy_vals).mean()
 
+    # IDENTIFIABILITY regularizer: supervised contrastive on the shift by ANNOTATED FATE —
+    # TFs sharing a developmental fate (Joung NNLS annotation) pull together, different
+    # fates push apart. Structures the latent along the identifiable (fate) axis.
+    ident_term = torch.zeros((), device=device)
+    if ident_weight > 0 and fate_labels is not None and B >= 2:
+        fa = fate_labels[gi_c[:, 0]]                                   # [B] fate id per TF (-1=none)
+        z = S_shift - S_shift.mean(1, keepdim=True)
+        z = z / (z.norm(dim=1, keepdim=True) + 1e-8)
+        sim = (z @ z.T) / ident_temp                                  # [B, B]
+        eye = torch.eye(B, dtype=torch.bool, device=device)
+        sim = sim.masked_fill(eye, float('-inf'))
+        valid = fa >= 0
+        pos = (fa.unsqueeze(0) == fa.unsqueeze(1)) & ~eye & valid.unsqueeze(0) & valid.unsqueeze(1)
+        anchors = valid & (pos.sum(1) > 0)                            # anchors with ≥1 same-fate positive
+        if anchors.any():
+            logp = sim - torch.logsumexp(sim, dim=1, keepdim=True)    # masked log-softmax
+            # torch.where (not *pos): the -inf diagonal × 0 would be NaN
+            sup = torch.where(pos, logp, torch.zeros_like(logp)).sum(1) / pos.float().sum(1).clamp(min=1)
+            ident_term = -sup[anchors].mean()                         # SupCon
+
     shift_l1_term = S_shift.abs().mean()
     loss = (mse_weight * mse_term + mmd_weight * mmd_term
             + energy_weight * energy_term + shift_l1_weight * shift_l1_term
-            + contrastive_weight * contrastive_term)
+            + contrastive_weight * contrastive_term + ident_weight * ident_term
+            + dag_util_weight * dag_util_term)
 
     with torch.no_grad():
         diagnostics = {
@@ -688,6 +728,8 @@ def perturbation_set_loss_shift_mutilate(
             'mmd_term': float(mmd_term.item()) if mmd_weight > 0 else 0.0,
             'energy_term': float(energy_term.item()) if energy_weight > 0 else 0.0,
             'contrastive_term': float(contrastive_term.item()) if contrastive_weight > 0 else 0.0,
+            'ident_term': float(ident_term.item()) if ident_weight > 0 else 0.0,
+            'dag_util_term': float(dag_util_term.item()) if dag_util_weight > 0 else 0.0,
             'shift_l1_term': float(shift_l1_term.item()),
             'u_mode': u_mode, 'u_clip_max': float(u_clip_max), 'shift_beta': float(shift_beta),
             'mean_u': float(u.mean().item()), 'max_u': float(u.max().item()),

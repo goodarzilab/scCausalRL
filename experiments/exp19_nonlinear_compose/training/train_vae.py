@@ -180,6 +180,9 @@ def train_vae(config, data_dict=None, device=None):
                 val_frac=config['data'].get('single_pert_val_frac', 0.1),
                 split_seed=config['data'].get('split_seed', 42),
                 min_cells_per_pert=config['data'].get('min_cells_per_pert', 5),
+                load_combos=bool(config['data'].get('load_combos', False)),
+                combo_proc_path=config['data'].get('joung_combo_proc_path'),
+                min_combo_cells=int(config['data'].get('min_combo_cells', 20)),
             )
         elif dataset_name == 'combined':
             from data.load_combined import load_combined
@@ -293,6 +296,24 @@ def train_vae(config, data_dict=None, device=None):
 
     intv_cfg = config.get('intervention', {}) or {}
     use_shift_encoder = bool(m.get('use_shift_encoder', False))
+
+    # ── Optional SENA-δ encoder: build the GO:BP gene→pathway mask on this gene axis ──
+    # GO:BP membership (NOT CollecTRI) anchors latent programs to named processes,
+    # breaking the encoder/decoder rotational symmetry so A is load-bearing. The mask
+    # ships in the checkpoint (persistent buffer); CollecTRI stays eval-only.
+    encoder_type = m.get('encoder_type', 'mlp')
+    sena_mask = None
+    if encoder_type == 'sena':
+        from utils.bio_priors import build_go_bp_mask
+        sena_mask, sena_terms = build_go_bp_mask(
+            gene_names,
+            max_term_size=int(m.get('sena_max_term_size', 30)),
+            min_genes_in_axis=int(m.get('sena_min_genes', 5)),
+            max_overlap=float(m.get('sena_max_overlap', 0.5)),
+            leak=float(m.get('sena_leak', 0.1)),
+            max_pathways=m.get('sena_max_pathways', None))
+        sena_mask = torch.as_tensor(sena_mask, dtype=torch.float32)
+
     model = CausalVAE(
         n_genes=n_genes,
         latent_dim=m['latent_dim'],
@@ -318,6 +339,11 @@ def train_vae(config, data_dict=None, device=None):
         u_gate_mlp=bool(m.get('u_gate_mlp', False)),
         nonlinear_eps_mix=bool(m.get('nonlinear_eps_mix', False)),
         gate_hidden=int(m.get('gate_hidden', 256)),
+        u_gate_pure=bool(m.get('u_gate_pure', False)),
+        dag_disabled=bool(m.get('dag_disabled', False)),
+        encoder_type=encoder_type,
+        sena_mask=sena_mask,
+        sena_activation=m.get('sena_activation', 'tanh'),
     ).to(device)
 
     print(f"Model: CausalVAE(n_genes={n_genes}, latent_dim={m['latent_dim']}, "
@@ -341,6 +367,30 @@ def train_vae(config, data_dict=None, device=None):
                              f"{model.pert_label.shape[1]} — set model.shift_label_dim accordingly")
         model.set_pert_labels(torch.as_tensor(desc, dtype=torch.float32))
         print(f"Shift encoder: descriptor='{descriptor}' shape {tuple(model.pert_label.shape)}")
+
+    # ── Fate labels for the identifiability regularizer (Joung NNLS annotation) ──
+    # Per-gene integer fate id (Cao-mouse developmental fate), aligned to gene_names;
+    # -1 = unannotated. Only built when pert_ident_weight>0. The SupCon-by-fate term in
+    # the loss pulls same-fate TF shifts together / different-fate apart → structures the
+    # latent along the identifiable developmental axis.
+    fate_labels_t = None
+    if float(p1.get('pert_ident_weight', 0.0)) > 0:
+        import pandas as pd
+        ann_csv = ('/home/sgoudarzi/scCausalRL/experiments/exp17_joung_tfatlas/'
+                   'analysis/mouse_dev_annotation/joung_tf_developmental_annotation.csv')
+        ann = pd.read_csv(ann_csv)
+        fate_of = dict(zip(ann['TF'].astype(str), ann['main_fate'].astype(str)))
+        cats = sorted({f for f in fate_of.values() if f and f != 'nan'})
+        cat_id = {c: i for i, c in enumerate(cats)}
+        fl = np.full(len(gene_names), -1, dtype=np.int64)
+        n_ann = 0
+        for gi, g in enumerate(gene_names):
+            f = fate_of.get(str(g))
+            if f and f in cat_id:
+                fl[gi] = cat_id[f]; n_ann += 1
+        fate_labels_t = torch.tensor(fl, dtype=torch.long, device=device)
+        print(f"Identifiability reg: ident_weight={p1.get('pert_ident_weight')} "
+              f"({n_ann}/{len(gene_names)} genes annotated, {len(cats)} fates)")
 
     # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=p1['lr'])
@@ -412,14 +462,24 @@ def train_vae(config, data_dict=None, device=None):
         combo_perts_all = data_dict.get('combo_perts', {}) or {}
         combo_train_keys, combo_test_keys = set(), set()
         if combo_perts_all and float(p1.get('combo_train_frac', 0.0)) > 0:
-            import hashlib
-            frac = float(p1.get('combo_train_frac', 0.7))
-            sseed = int(config['data'].get('split_seed', 42))
-            for key in combo_perts_all:
-                hh = int(hashlib.md5(f"{sseed}|{key[0]}|{key[1]}".encode()).hexdigest(), 16) % 1000 / 1000.0
-                (combo_train_keys if hh < frac else combo_test_keys).add(key)
-            print(f"Combo split: {len(combo_train_keys)} train / {len(combo_test_keys)} test "
-                  f"combos (frac={frac}); {len(combo_perts_all)} total")
+            holdout = p1.get('combo_holdout_keys')
+            if holdout:
+                # FIXED holdout: train on every combo EXCEPT these (used to honestly hold out
+                # the RL test pairs, since the RL split is independent of the hash split).
+                ho = {tuple(sorted(k)) for k in holdout}
+                for key in combo_perts_all:
+                    (combo_test_keys if tuple(sorted(key)) in ho else combo_train_keys).add(key)
+                print(f"Combo FIXED-HOLDOUT split: {len(combo_train_keys)} train / "
+                      f"{len(combo_test_keys)} test (held out {len(ho)} given pairs); {len(combo_perts_all)} total")
+            else:
+                import hashlib
+                frac = float(p1.get('combo_train_frac', 0.7))
+                sseed = int(config['data'].get('split_seed', 42))
+                for key in combo_perts_all:
+                    hh = int(hashlib.md5(f"{sseed}|{key[0]}|{key[1]}".encode()).hexdigest(), 16) % 1000 / 1000.0
+                    (combo_train_keys if hh < frac else combo_test_keys).add(key)
+                print(f"Combo split: {len(combo_train_keys)} train / {len(combo_test_keys)} test "
+                      f"combos (frac={frac}); {len(combo_perts_all)} total")
             # stash split into config so it travels with every checkpoint (eval filters held-out)
             config.setdefault('phase1', {})['combo_test_keys'] = [list(k) for k in sorted(combo_test_keys)]
             config['phase1']['combo_train_keys'] = [list(k) for k in sorted(combo_train_keys)]
@@ -616,6 +676,11 @@ def train_vae(config, data_dict=None, device=None):
                             contrastive_temp=float(p1.get('pert_contrastive_temp', 0.2)),
                             drift=delta_drift_t,
                             residual_target=bool(p1.get('pert_residual_target', False)),
+                            fate_labels=fate_labels_t,
+                            ident_weight=float(p1.get('pert_ident_weight', 0.0)),
+                            ident_temp=float(p1.get('pert_ident_temp', 0.2)),
+                            dag_util_weight=float(p1.get('pert_dag_util_weight', 0.0)),
+                            dag_util_margin=float(p1.get('pert_dag_util_margin', 0.0)),
                         )
                     elif use_shift_encoder:
                         # Learned-shift set loss (MSE on mean shift + MMD [+ energy]).
@@ -706,6 +771,20 @@ def train_vae(config, data_dict=None, device=None):
                 prior_loss=prior_loss_val,
                 dag_active=dag_active,
             )
+
+            # ── ε-decorrelation loss (make A load-bearing) ──────────────────────
+            # Penalise the off-diagonal of the batch covariance of the exogenous noise ε.
+            # With an orthonormal decoder + decorrelated ε, program-program correlation can
+            # ONLY be produced by A (Cov(z)=(I−Aᵀ)⁻¹Cov(ε)(I−A)⁻¹ ⇒ A becomes the Cholesky
+            # factor of the latent precision). Closes the "route correlation through the
+            # aggregate posterior of ε instead of A" escape hatch that KL does not block.
+            lam_eps = float(p1.get('lambda_eps_decorr', 0.0))
+            if lam_eps > 0 and dag_active and epsilon.shape[0] > 2:
+                e = epsilon - epsilon.mean(0, keepdim=True)          # center → covariance
+                cov = (e.T @ e) / (e.shape[0] - 1)                   # [d, d]
+                eps_decorr = (cov - torch.diag(torch.diagonal(cov))).pow(2).sum()
+                losses['total'] = losses['total'] + lam_eps * dag_ramp * eps_decorr
+                losses['eps_decorr'] = eps_decorr.detach()
 
             # Gradient accumulation: scale loss and accumulate
             scaled_loss = losses['total'] / accumulation_steps

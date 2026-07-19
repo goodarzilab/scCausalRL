@@ -1,0 +1,39 @@
+# all-40 / full-combo trainings (with interaction head)
+v2b_prod_deg8_all40
+v2b_ft_fullcombo
+v2b_ft_fullcombo_fx
+v2b_ft_ixhead_frozen
+v2b_ft_ixhead_frozen_fx
+v2b_ft_combofrac0p1_fx
+v2b_mmd1_Jcombo_ho50
+v2b_mmd1_deg2_Jcombo_ho50
+v2b_mmd1_JNcombo_ho50
+# frozen-head DEG-weight sweep (interaction head)
+v2b_fthead_r32
+v2b_fthead_r64
+v2b_fthead_r64_e80
+v2b_deg3_t25_frozen_r32_s1
+v2b_deg5_frozen_r32
+v2b_deg8_frozen_r32
+v2b_deg10_frozen_r32
+v2b_dag_head_r16
+# head-off / singles references
+v2b_dag_only_nohead
+v2b_mmd1_deg2
+v2b_mmd1_deg8
+# MMD sweep (the prediction lever)
+v2b_mmd0p25
+v2b_mmd0p5
+v2b_mmd2
+v2b_mmd5
+v2b_mmd10
+# DEG sweep
+v2b_mmd1_deg1
+v2b_mmd1_deg3
+v2b_mmd1_deg5
+# architecture variants
+v2b_masked_go
+v2b_nlSCM_mmd1
+v2b_nlSCM_mmd2_deg2
+of_Jhs_L256_k32
+of_J_hardself_k8_base

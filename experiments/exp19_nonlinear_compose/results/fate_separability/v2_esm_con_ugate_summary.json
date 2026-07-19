@@ -1,0 +1,15 @@
+{
+  "tag": "v2_esm_con_ugate",
+  "n_test": 109,
+  "n_celltypes": 20,
+  "chance_top1": 0.05,
+  "fate_top1": 0.046,
+  "fate_top3": 0.202,
+  "fate_top5": 0.312,
+  "fate_betacos": 0.079,
+  "fate_retrieval_top1": 0.0,
+  "chance_retrieval": 0.009,
+  "obs_margin_median": 0.039,
+  "obs_margin_mean": 0.049,
+  "frac_obs_margin_gt_0.1": 0.11
+}

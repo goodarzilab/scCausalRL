@@ -16,9 +16,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from core.wm_loader import load_frozen_wm
-from core.wm_operator import WorldModelOperator
-from core.wm_data import WMData
+from core.setup_stack import add_stack_args, build_stack
 from core.env import CausalLatentEnv
 from rl0_mpc.mpc_planner import MPCPlanner
 from rl2_set_ppo.set_ppo import SetPPO
@@ -73,6 +71,7 @@ def behavioral_clone(agent, S, T, TOK, epochs=200, batch=64, lr=1e-3, device='cp
 
 def main():
     ap = argparse.ArgumentParser()
+    add_stack_args(ap)
     ap.add_argument('--bc_epochs', type=int, default=200)
     ap.add_argument('--ppo_iters', type=int, default=3000)
     ap.add_argument('--k_max', type=int, default=2)
@@ -80,7 +79,7 @@ def main():
     ap.add_argument('--alpha', type=float, default=1.0)
     ap.add_argument('--mpc_beam', type=int, default=4)
     ap.add_argument('--n_ctrl', type=int, default=300)
-    ap.add_argument('--pool', default='full', choices=['full', 'screened'])
+    ap.add_argument('--pool', default='full', choices=['full', 'screened', 'curated'])
     ap.add_argument('--wandb', action='store_true')
     ap.add_argument('--run_name', default='set_ppo_distill')
     ap.add_argument('--output', default='rl3_mpc_distill/results')
@@ -89,9 +88,7 @@ def main():
     os.makedirs(args.output, exist_ok=True)
     dev = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model, meta = load_frozen_wm(device=dev)
-    op = WorldModelOperator(model, meta, n_dag_samples=args.n_dag)
-    data = WMData(model, meta, op, n_ctrl_cells=args.n_ctrl)
+    model, meta, op, data = build_stack(args, dev, args.n_dag)
     data.set_pool(args.pool)
     env = CausalLatentEnv(op, data, max_steps=1, alpha_pess=args.alpha, n_dag_samples=args.n_dag)
     mpc = MPCPlanner(op, data, max_set=args.k_max, beam_width=args.mpc_beam,

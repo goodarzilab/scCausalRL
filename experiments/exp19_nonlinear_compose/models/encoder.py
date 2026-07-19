@@ -2,6 +2,70 @@ import torch
 import torch.nn as nn
 
 
+class SENAEncoder(nn.Module):
+    """SENA-δ encoder (de la Fuente et al., ICLR 2025): a masked gene→pathway layer
+    that anchors latent programs to known GO:BP gene sets, breaking the rotational
+    non-identifiability of the linear encoder→linear-decoder pair (so the latent DAG A
+    becomes load-bearing & interpretable instead of absorbable into the decoder).
+
+    Architecture (matches the paper):
+        α   = act( x @ (W ⊙ M) + b )                      # pathway activities  [B, K]
+        μ   = α @ Wμ ,   log_var = α @ Wσ                  # linear meta-pathway heads
+
+    M is the gene×pathway membership mask with leak λ (1 for members, λ for non-members);
+    stored as a persistent buffer so it reloads exactly. W is masked at every forward so
+    non-member genes contribute only through the λ leak. Optional modality/batch shifts are
+    added on the pathway-activity hidden (mirrors CausalEncoder), unused for singles runs.
+    """
+
+    def __init__(self, input_dim, latent_dim, mask, activation='tanh',
+                 n_modalities=0, n_batches=0):
+        super().__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        mask = torch.as_tensor(mask, dtype=torch.float32)
+        assert mask.shape[0] == input_dim, f"mask rows {mask.shape[0]} != n_genes {input_dim}"
+        self.n_pathways = int(mask.shape[1])
+        self.register_buffer('M', mask, persistent=True)       # [n_genes, K]
+        self.W = nn.Parameter(torch.empty(input_dim, self.n_pathways))
+        nn.init.xavier_uniform_(self.W)
+        self.bias = nn.Parameter(torch.zeros(self.n_pathways))
+        self.activation = activation
+        self._act = {'tanh': torch.tanh, 'relu': torch.relu,
+                     'none': (lambda z: z)}[activation]
+        self.n_modalities = n_modalities
+        self.n_batches = n_batches
+        self.modality_emb = nn.Embedding(n_modalities, self.n_pathways) if n_modalities > 0 else None
+        self.batch_emb = nn.Embedding(n_batches, self.n_pathways) if n_batches > 0 else None
+        self.mu_head = nn.Linear(self.n_pathways, latent_dim)
+        self.log_var_head = nn.Linear(self.n_pathways, latent_dim)
+
+    def reparameterize(self, mu, log_var):
+        if self.training:
+            std = torch.exp(0.5 * log_var)
+            return mu + std * torch.randn_like(std)
+        return mu
+
+    def pathway_activity(self, x):
+        """α = act(x @ (W⊙M) + b)  — the interpretable per-pathway activity [B, K]."""
+        return self._act(x @ (self.W * self.M) + self.bias)
+
+    def forward(self, x, modality_id=None, batch_id=None):
+        alpha = self.pathway_activity(x)                        # [B, K]
+        if self.modality_emb is not None:
+            if modality_id is None:
+                modality_id = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+            alpha = alpha + self.modality_emb(modality_id)
+        if self.batch_emb is not None:
+            if batch_id is None:
+                batch_id = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+            alpha = alpha + self.batch_emb(batch_id)
+        mu = self.mu_head(alpha)
+        log_var = torch.clamp(self.log_var_head(alpha), min=-10.0, max=10.0)
+        epsilon = self.reparameterize(mu, log_var)
+        return mu, log_var, epsilon
+
+
 class CausalEncoder(nn.Module):
     """
     Maps gene expression (and optionally a modality token) to exogenous noise epsilon.
