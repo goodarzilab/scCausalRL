@@ -1,0 +1,198 @@
+% ============================================================================
+% references_verified.bib
+% Web-verified bibliography for the NeurIPS 2026 submission (verified 2026-08-17).
+% Every entry below was checked against a primary source (publisher page,
+% Crossref, arXiv, bioRxiv, or GEO). See per-entry NOTE fields for what changed.
+%
+% CRITICAL FIXES vs the original references.bib:
+%   * briggs2017  -> RENAMED to briggs2026. The old title ("The dynamics of gene
+%     expression in vertebrate embryogenesis") and author ("Jonathan A. Briggs")
+%     were the WRONG (zebrafish) paper. Our dataset (GSE328457, "Briggs_TF_2026")
+%     is James A. Briggs et al., Cell Systems 2026 (see entry).
+%   * sena2025    -> arXiv ID 2506.22641 was WRONG (that ID is Mejia et al.,
+%     "Diversity by Design"). Correct paper is de la Fuente et al.,
+%     ICLR 2025, arXiv:2506.12439.
+%   * wytock2024  -> title was WRONG. The cited DOI (pnas.2312942121) is
+%     "Cell reprogramming design by transfer learning of functional
+%     transcriptional networks" (title corrected; AUROC 0.91 + additive
+%     superposition claims VERIFIED verbatim).
+%   * collectri2023 -> wrong title AND wrong journal (was Genome Medicine;
+%     is Nucleic Acids Research).
+%   * perturbench2024 / dirl2025 / tfcomb -> placeholder authors replaced with
+%     real, verified authors.
+% ============================================================================
+
+@inproceedings{zhang2023discrepancyvae,
+  title   = {Identifiability Guarantees for Causal Disentanglement from Soft Interventions},
+  author  = {Zhang, Jiaqi and Squires, Chandler and Greenewald, Kristjan and Srivastava, Akash and Shanmugam, Karthikeyan and Uhler, Caroline},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume  = {36},
+  year    = {2023},
+  eprint  = {2307.06250},
+  archivePrefix = {arXiv},
+  note    = {VERIFIED. Introduces the discrepancy-VAE. arXiv:2307.06250.}}
+
+@inproceedings{sena2025,
+  title   = {Interpretable Causal Representation Learning for Biological Data in the Pathway Space},
+  author  = {de la Fuente, Jesus and Lehmann, Robert and Ruiz-Arenas, Carlos and Voges, Jan and Marin-Go{\~n}i, Irene and Martinez-de-Morentin, Xabier and Gomez-Cabrero, David and Ochoa, Idoia and Tegner, Jesper and Lagani, Vincenzo and Hernaez, Mikel},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year    = {2025},
+  eprint  = {2506.12439},
+  archivePrefix = {arXiv},
+  note    = {CORRECTED. This is the SENA-discrepancy-VAE paper. Original entry had wrong title and WRONG arXiv ID (2506.22641 belongs to Mejia et al., ``Diversity by Design''). Correct arXiv:2506.12439; published at ICLR 2025.}}
+
+@inproceedings{samsvae2023,
+  title   = {Modelling Cellular Perturbations with the Sparse Additive Mechanism Shift Variational Autoencoder},
+  author  = {Bereket, Michael and Karaletsos, Theofanis},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume  = {36},
+  year    = {2023},
+  eprint  = {2311.02794},
+  archivePrefix = {arXiv},
+  note    = {CORRECTED title (official title spells out ``the ... Variational Autoencoder''). Published at NeurIPS 2023. arXiv:2311.02794.}}
+
+@article{biolord2024,
+  title   = {Disentanglement of single-cell data with biolord},
+  author  = {Piran, Zoe and Cohen, Niv and Hoshen, Yedid and Nitzan, Mor},
+  journal = {Nature Biotechnology},
+  volume  = {42},
+  number  = {11},
+  pages   = {1678--1683},
+  year    = {2024},
+  doi     = {10.1038/s41587-023-02079-x},
+  note    = {CORRECTED page range (1678--1683, not just 1678); added DOI.}}
+
+@article{ahlmanneltze2025,
+  title   = {Deep-learning-based gene perturbation effect prediction does not yet outperform simple linear baselines},
+  author  = {Ahlmann-Eltze, Constantin and Huber, Wolfgang and Anders, Simon},
+  journal = {Nature Methods},
+  volume  = {22},
+  number  = {8},
+  pages   = {1657--1661},
+  year    = {2025},
+  doi     = {10.1038/s41592-025-02772-6},
+  note    = {VERIFIED; added volume/issue/pages/DOI. (bioRxiv preprint had a slightly different title.)}}
+
+@article{perturbench2024,
+  title   = {PerturBench: Benchmarking Machine Learning Models for Cellular Perturbation Analysis},
+  author  = {Wu, Yan and Wershof, Esther and Schmon, Sebastian M. and Nassar, Marcel and Osi{\'n}ski, B{\l}a{\.z}ej and Eksi, Ridvan and Yan, Zichao and Stark, Rory and Zhang, Kun and Graepel, Thore},
+  journal = {arXiv preprint arXiv:2408.10609},
+  year    = {2024},
+  eprint  = {2408.10609},
+  archivePrefix = {arXiv},
+  note    = {CORRECTED. Placeholder ``{PerturBench authors}'' replaced with real author list. arXiv:2408.10609.}}
+
+@article{genernib2025,
+  title   = {geneRNIB: a living benchmark for gene regulatory network inference},
+  author  = {Nourisa, Jalil and Passemiers, Antoine and Kalfon, Jeremie and Stock, Marco and Zeller-Plumhoff, Berit and Cannoodt, Robrecht and Arnold, Christian and Tong, Alexander and Hartford, Jason and Netea, Mihai G. and Scialdone, Antonio and Cantini, Laura and Moreau, Yves and Raimondi, Daniele and Li, Yang and Luecken, Malte D.},
+  journal = {bioRxiv},
+  year    = {2025},
+  doi     = {10.1101/2025.02.25.640181},
+  note    = {VERIFIED; expanded author list (senior author Malte D. Luecken). bioRxiv 2025.02.25.640181.}}
+
+@article{dirl2025,
+  title   = {Reinforcement learning enables single-cell foundation models to learn cellular differentiation},
+  author  = {Chang, Kai-Li and Chen, Hu and Liu, Zhandong},
+  journal = {bioRxiv},
+  year    = {2025},
+  doi     = {10.64898/2025.12.09.693267},
+  note    = {VERIFIED to exist (posted 2025-12-12). Framework = DiRL (Differentiation with Reinforcement Learning). Placeholder ``{DiRL authors}'' replaced with real authors. bioRxiv 2025.12.09.693267.}}
+
+@article{wytock2024,
+  title   = {Cell reprogramming design by transfer learning of functional transcriptional networks},
+  author  = {Wytock, Thomas P. and Motter, Adilson E.},
+  journal = {Proceedings of the National Academy of Sciences (PNAS)},
+  volume  = {121},
+  number  = {11},
+  pages   = {e2312942121},
+  year    = {2024},
+  doi     = {10.1073/pnas.2312942121},
+  eprint  = {2403.04837},
+  archivePrefix = {arXiv},
+  note    = {CORRECTED title (original ``Predicting cell-fate transitions...'' was wrong; the cited DOI is this paper). CLAIM VERIFIED verbatim: ``reproduces known reprogramming protocols with an average AUROC of 0.91'' and ``additively combines transcriptional responses to gene perturbations''.}}
+
+@article{tfcomb,
+  title   = {TFcomb identifies transcription factor combinations for cellular reprogramming based on single-cell multiomics data},
+  author  = {Li, Chen and Chen, Sijie and Chen, Yixin and Bian, Haiyang and Hao, Minsheng and Wei, Lei and Zhang, Xuegong},
+  journal = {Genome Research},
+  volume  = {35},
+  number  = {6},
+  pages   = {1429--1439},
+  year    = {2025},
+  doi     = {10.1101/gr.279955.124},
+  note    = {RESOLVED. Placeholder ``{TFcomb authors}'' replaced with real authors. ``scDirect'' is the earlier/preprint name of the same tool (GitHub Chen-Li-17/TFcomb); the published paper is TFcomb (Genome Research 2025, PMID 40210438). VERIFIED it recovers the Yamanaka factors (POU5F1/OCT4, SOX2, KLF4, MYC) for fibroblast-to-iPSC reprogramming.}}
+
+@article{bengio2021gflownet,
+  title   = {Flow Network based Generative Models for Non-Iterative Diverse Candidate Generation},
+  author  = {Bengio, Emmanuel and Jain, Moksh and Korablyov, Maksym and Precup, Doina and Bengio, Yoshua},
+  journal = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume  = {34},
+  pages   = {27381--27394},
+  year    = {2021},
+  eprint  = {2106.04399},
+  archivePrefix = {arXiv},
+  note    = {VERIFIED; added arXiv:2106.04399, NeurIPS vol 34 pp 27381--27394.}}
+
+@article{joung2023tfatlas,
+  title   = {A transcription factor atlas of directed differentiation},
+  author  = {Joung, Julia and Ma, Sai and Tay, Tristan and Geiger-Schuller, Kathryn R. and Kirchgatterer, Paul C. and others},
+  journal = {Cell},
+  volume  = {186},
+  number  = {1},
+  pages   = {209--229.e26},
+  year    = {2023},
+  doi     = {10.1016/j.cell.2022.11.026},
+  note    = {VERIFIED; added volume/issue/pages/DOI. Senior author Feng Zhang; Aviv Regev second-to-last. (First 5 authors listed + et al.)}}
+
+@article{briggs2026,
+  title   = {Pooled combinatorial screening identifies transcription factor sets that drive hematopoietic progenitor-like cell fate},
+  author  = {Briggs, James A. and Cho, Janghwan and Strebinger, Daniel and Joung, Julia and Braun, Tatum W. and Macrae, Rhiannon K. and Li, Hojun and Zhang, Feng},
+  journal = {Cell Systems},
+  year    = {2026},
+  pages   = {101644},
+  doi     = {10.1016/j.cels.2026.101644},
+  note    = {REPLACES the misattributed briggs2017 entry. This is the actual dataset paper (human H1-ESC -> HSPC combinatorial TF-overexpression screen). GEO accession GSE328457 (submitted 2026-04-20) is the linked dataset for this publication. First author is James A. Briggs (NOT Jonathan A. Briggs, who authored the unrelated 2017/2018 zebrafish embryogenesis paper). Article number 101644, Cell Systems 2026.}}
+
+@article{cao2020fetal,
+  title   = {A human cell atlas of fetal gene expression},
+  author  = {Cao, Junyue and O'Day, Diana R. and Pliner, Hannah A. and Kingsley, Paul D. and Deng, Mei and others},
+  journal = {Science},
+  volume  = {370},
+  number  = {6518},
+  pages   = {eaba7721},
+  year    = {2020},
+  doi     = {10.1126/science.aba7721},
+  note    = {VERIFIED; added issue 6518, article number eaba7721, DOI. Senior author Jay Shendure (17 authors total).}}
+
+@article{collectri2023,
+  title   = {Expanding the coverage of regulons from high-confidence prior knowledge for accurate estimation of transcription factor activities},
+  author  = {M{\"u}ller-Dott, Sophia and Tsirvouli, Eirini and Vazquez, Miguel and Ramirez Flores, Ricardo O. and Badia-i-Mompel, Pau and Fallegger, Robin and T{\"u}rei, D{\'e}nes and L{\ae}greid, Astrid and Saez-Rodriguez, Julio},
+  journal = {Nucleic Acids Research},
+  volume  = {51},
+  number  = {20},
+  pages   = {10934--10949},
+  year    = {2023},
+  doi     = {10.1093/nar/gkad841},
+  note    = {CORRECTED. Original title (``CollecTRI: a comprehensive collection of TF regulons'') and journal (``Genome Medicine'') were both WRONG. CollecTRI is the resource name; this is the published article introducing it in Nucleic Acids Research.}}
+
+@article{garcia2019dorothea,
+  title   = {Benchmark and integration of resources for the estimation of human transcription factor activities},
+  author  = {Garcia-Alonso, Luz and Holland, Christian H. and Ibrahim, Mahmoud M. and T{\"u}rei, D{\'e}nes and Saez-Rodriguez, Julio},
+  journal = {Genome Research},
+  volume  = {29},
+  number  = {8},
+  pages   = {1363--1375},
+  year    = {2019},
+  doi     = {10.1101/gr.240663.118},
+  note    = {CORRECTED title (removed ``(DoRothEA)'' suffix; ``TF'' spelled out); added volume/issue/pages/DOI. DoRothEA is the resource introduced here.}}
+
+@article{szklarczyk2023string,
+  title   = {The STRING database in 2023: protein-protein association networks and functional enrichment analyses for any sequenced genome of interest},
+  author  = {Szklarczyk, Damian and Kirsch, Rebecca and Koutrouli, Mikaela and Nastou, Katerina and Mehryary, Farrokh and Hachilif, Radja and Gable, Annika L. and Fang, Tao and Doncheva, Nadezhda T. and Pyysalo, Sampo and Bork, Peer and Jensen, Lars J. and von Mering, Christian},
+  journal = {Nucleic Acids Research},
+  volume  = {51},
+  number  = {D1},
+  pages   = {D638--D646},
+  year    = {2023},
+  doi     = {10.1093/nar/gkac1000},
+  note    = {CORRECTED; appended full subtitle; added volume/issue/pages/DOI.}}

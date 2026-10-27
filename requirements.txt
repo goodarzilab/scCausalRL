@@ -1,13 +1,23 @@
+# Core scientific / deep-learning stack
 torch>=2.0
-scanpy>=1.9
-anndata>=0.10
 numpy
 scipy
 scikit-learn
 pandas
 pyyaml
-matplotlib
-seaborn
-tqdm
+
+# Single-cell data handling
+scanpy>=1.9
+anndata>=0.10
 decoupler>=1.4
 leidenalg
+
+# Plotting (figures)
+matplotlib
+seaborn
+
+# Utilities
+tqdm
+
+# Optional: experiment tracking (imported lazily; training/planning run without it)
+wandb

@@ -1,114 +1,203 @@
-# Python
+# ======================================================================
+# scCausalRL — public release .gitignore
+#
+# This repository tracks ONLY the source code, configs, figure scripts,
+# and manuscript behind the paper:
+#   "Compositional Perturbation Planning with a Generative Structural
+#    Causal World Model" (NeurIPS 2026 workshop).
+#
+# Large binaries (checkpoints, datasets, result dumps), legacy precursor
+# experiments, abandoned model arms, and internal working notes are left
+# on disk but intentionally NOT tracked. See README.md "Repository layout".
+# ======================================================================
+
+# ----- Python -----
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+.eggs/
+.ipynb_checkpoints/
 
-# Virtual environments
+# ----- Environments -----
+.venv/
 venv/
-ENV/
 env/
-.venv
+ENV/
+.env
 
-# Jupyter Notebooks
-.ipynb_checkpoints
-*.ipynb_checkpoints
-
-# IDE
+# ----- IDE / OS -----
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
+Thumbs.db
 
-# Data files (large files)
-*.h5
-*.hdf5
-*.npy
-*.npz
-*.pkl
-*.pickle
-*.csv
-*.tsv
-*.parquet
-*.zarr
-*.arrow
-
-# Model checkpoints
+# ======================================================================
+# Large binaries — never tracked anywhere in the tree
+# ======================================================================
 *.pt
 *.pth
 *.ckpt
 *.safetensors
-checkpoints/
-saved_models/
-
-# Logs
-logs/
-*.log
-wandb/
-runs/
-tensorboard/
-
-# Results (excluding small config files)
-results/**/*.pt
-results/**/*.pth
-results/**/*.pkl
-results/**/*.npy
-results/**/*.h5
-results/**/*.csv
-
-# Data directories with large files
-data/**/*.h5
-data/**/*.hdf5
-data/**/*.npy
-data/**/*.npz
-data/**/*.pkl
-data/**/*.csv
-data/**/*.tsv
-data/**/*.parquet
-
-# Specific large directories
-Norman/
-Replogle/
-Waddington_OT/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# System files
-.DS_Store
-Thumbs.db
-
-# Keep important config files
-!configs/*.yaml
-!configs/*.yml
-!requirements.txt
-# executed analysis notebooks (heavy embedded outputs)
-experiments/notebooks/dag_analysis_*_executed.ipynb
-
-# Large data / reference binaries (never tracked in experiment folders)
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.hdf5
 *.h5ad
+*.zarr
+*.arrow
+*.parquet
+*.feather
+*.mtx
+*.mtx.gz
+*.bam
 *.fasta
 *.fa
-*.RDS
 *.rds
-*.rpt
+*.RDS
+*.csv
+*.tsv
+
+# ======================================================================
+# Run artifacts — any directory, any depth
+# ======================================================================
+**/wandb/
+**/runs/
+**/logs/
+**/checkpoints/
+**/results/
+**/tensorboard/
+**/_archive/
+*.log
+
+# ======================================================================
+# Experiment tracking caches
+# ======================================================================
+.claude/
+
+# ======================================================================
+# LaTeX build artifacts (keep .tex / .bib / .sty / .pdf)
+# ======================================================================
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.nav
+*.snm
+*.vrb
+*.out
+
+# ======================================================================
+# Legacy precursor experiments (exp1–exp19) — superseded by exp20
+# Kept on disk, not part of the published work.
+# ======================================================================
+experiments/exp1_baseline/
+experiments/exp2_shift_linear/
+experiments/exp3_shift_mlp/
+experiments/exp4_shift_linear_energy/
+experiments/exp5_shift_mlp_energy/
+experiments/exp6_shift_linear_mmd_mse/
+experiments/exp7_shift_linear_mmd_cosine/
+experiments/exp8_dag_revival_grid/
+experiments/exp9_prior_generalization/
+experiments/exp10_sparsity_disentangle/
+experiments/exp11_norman_shift/
+experiments/exp12_shift_mutilate/
+experiments/exp13_crosscell_rpe1/
+experiments/exp14_norman_combotrain/
+experiments/exp15_modality_combined/
+experiments/exp16_multicellline/
+experiments/exp17_joung_tfatlas/
+experiments/exp18_state_comparison/
+experiments/exp19_nonlinear_compose/
+experiments/figures/
+experiments/logs/
+experiments/notebooks/
+experiments/EXPERIMENTS_OVERVIEW.md
+experiments/README.md
+experiments/*.sbatch
+experiments/plot_*.py
+
+# nested duplicate RL/stack trees inside exp20 (canonical copies live at repo root)
+experiments/exp20_load_bearing/experiments_rl/
+experiments/exp20_load_bearing/docs/
+experiments/exp20_load_bearing/runs/
+# cluster-specific SLURM launchers (reproduction commands are in README.md)
+# keep run_phase1.py — the world-model training entry point
+experiments/exp20_load_bearing/scripts/*
+!experiments/exp20_load_bearing/scripts/run_phase1.py
+experiments_rl/scripts/
+# internal sweep bookkeeping
+experiments/exp20_load_bearing/configs/briggs_seedcheck_tags.txt
+experiments/exp20_load_bearing/configs/briggs_sweep_tags.txt
+# keep ONLY the reported Joung+Briggs world-model recipes; drop exploratory sweeps
+experiments/exp20_load_bearing/configs/ablations/*
+!experiments/exp20_load_bearing/configs/ablations/joungbriggs/
+# legacy joint VAE+PPO trainer (superseded by frozen-WM + separate planner)
+experiments/exp20_load_bearing/training/train_joint.py
+# RL-overlap eval scripts that depend on the retired top-level rl/ package
+# (keep rl_gflownet_distribution.py — the reported diversity-at-quality analysis)
+experiments/exp20_load_bearing/evaluation/rl_*.py
+!experiments/exp20_load_bearing/evaluation/rl_gflownet_distribution.py
+
+# ======================================================================
+# Legacy top-level scaffold (exp1-era; superseded by experiments/exp20)
+# ======================================================================
+/checkpoints/
+/rl/
+/training/
+/models/
+/data/
+/evaluation/
+/utils/
+/configs/
+/notebooks/
+/scripts/
+/tests/
+/results/
+/logs/
+/wandb/
+/test.py
+
+# ----- old manuscript / slide drafts (paperv3 is the published version) -----
+/paper/
+/paperv2/
+/slides/
+/_preview_jbwmrl/
+paper_v2_current/paperv3/PLAN.md
+paper_v2_current/paperv3/references_ORIG_backup.bib
+
+# ======================================================================
+# Abandoned RL arms (not reported in the paper)
+#   rl1_seq_ppo  — sequential PPO
+#   rl3_mpc_distill — MPC→policy distillation
+# The flagship GFlowNet and the reported set-PPO / MPC baselines stay.
+# ======================================================================
+experiments_rl/rl1_seq_ppo/
+experiments_rl/rl3_mpc_distill/
+experiments_rl/analysis/joung_rl_ladder.py
+
+# ----- internal working notes / dev reports -----
+/CODE_REVIEW.md
+/CODE_REVIEW_RESPONSE.md
+/PROJECT_STATE.md
+docs/
+experiments/exp20_load_bearing/BRIGGS_BENCHMARK.md
+experiments_rl/RL_ARCHITECTURES.md
+experiments_rl/RL_TRAINING_DESIGN.md
+experiments_rl/SESSION_HANDOFF.md
+
+# ----- figure scratch files -----
+**/_scratch_*

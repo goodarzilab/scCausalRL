@@ -26,7 +26,8 @@ NEG_INF = -1e9
 
 
 class SetPolicy(nn.Module):
-    def __init__(self, state_dim, n_candidates, k_max=2, emb_dim=64, hidden=256, slot_dim=16):
+    def __init__(self, state_dim, n_candidates, k_max=2, emb_dim=64, hidden=256, slot_dim=16,
+                 slot_head='mlp', mp_hops=0, mp_gate='gated', mp_op=None, decode_W=None):
         super().__init__()
         self.C = int(n_candidates)
         self.k_max = int(k_max)
@@ -36,10 +37,30 @@ class SetPolicy(nn.Module):
             nn.Linear(hidden, hidden), nn.ReLU())
         self.gene_emb = nn.Embedding(self.C, emb_dim)       # e(g) for the context sum
         self.slot_emb = nn.Embedding(self.k_max, slot_dim)
+        feat = hidden + emb_dim + slot_dim
         self.head = nn.Sequential(
-            nn.Linear(hidden + emb_dim + slot_dim, hidden), nn.ReLU(),
+            nn.Linear(feat, hidden), nn.ReLU(),
             nn.Linear(hidden, self.V))
         self.emb_dim = emb_dim
+        # ---- GRAPH message-passing slot head (optional): propagate per-slot scores k hops over the WM's learned
+        # causal graph (fixed A^T operator), then read out candidate logits. Injects the WM mechanism as an
+        # action-space inductive bias. mlp=current; grn_latent=MP in 357-factor(GO) space then SENA-decode;
+        # grn_gene=MP directly on the candidate-gene GRN. gate: 'gated' = MLP base + beta*MP (residual); 'none' = pure MP. ----
+        self.slot_head = str(slot_head); self.mp_hops = int(mp_hops); self.mp_gate = str(mp_gate)
+        if self.slot_head != 'mlp':
+            assert mp_op is not None, "graph slot head needs mp_op"
+            self.register_buffer('mp_op', mp_op.float())              # [N,N] fixed row-normalized propagation operator
+            self.stop_head = nn.Linear(feat, 1)                      # STOP logit (graph head doesn't produce it)
+            if self.slot_head == 'grn_latent':
+                assert decode_W is not None, "grn_latent needs decode_W (SENA decoder rows for candidates)"
+                self.register_buffer('decode_W', decode_W.float())   # [C, d]
+                self.factor_head = nn.Linear(feat, mp_op.shape[0])   # feat -> d factor(GO-program) scores
+            elif self.slot_head == 'grn_gene':
+                self.cand_head = nn.Linear(feat, self.C)             # feat -> C candidate scores (MP on [C,C] GRN)
+            else:
+                raise ValueError(f"unknown slot_head {slot_head}")
+            if self.mp_gate == 'gated':
+                self.mp_beta = nn.Parameter(torch.tensor(0.5))       # learnable residual gate on the MP path
 
     def encode(self, s_emb, t_emb):
         return self.enc(torch.cat([s_emb, t_emb], -1))      # [B, hidden]
@@ -49,11 +70,29 @@ class SetPolicy(nn.Module):
         Returns masked logits [B, V]."""
         B = h.shape[0]
         slot = self.slot_emb(torch.full((B,), slot_i, dtype=torch.long, device=h.device))
-        logits = self.head(torch.cat([h, ctx_sum, slot], -1))    # [B, V]
+        feat = torch.cat([h, ctx_sum, slot], -1)
+        if self.slot_head == 'mlp':
+            logits = self.head(feat)                                 # [B, V]
+        else:
+            if self.slot_head == 'grn_latent':
+                s = self.factor_head(feat); acc = s                  # [B, d]
+                for _ in range(self.mp_hops):
+                    s = s @ self.mp_op.t(); acc = acc + s            # k-hop propagate over A^T
+                cand = acc @ self.decode_W.t()                       # [B, C]  SENA-decode to candidate genes
+            else:                                                    # grn_gene: MP directly on the candidate GRN
+                s = self.cand_head(feat); acc = s                    # [B, C]
+                for _ in range(self.mp_hops):
+                    s = s @ self.mp_op.t(); acc = acc + s
+                cand = acc                                           # [B, C]
+            mp_logits = torch.cat([self.stop_head(feat), cand], -1)  # [B, V]
+            logits = (self.head(feat) + self.mp_beta * mp_logits) if self.mp_gate == 'gated' else mp_logits
         if slot_i == 0:
             logits[:, 0] = NEG_INF                               # no STOP at slot 0
         if chosen_mask is not None and chosen_mask.any():
             logits[:, 1:] = logits[:, 1:].masked_fill(chosen_mask, NEG_INF)
+        ab = getattr(self, '_allowed_block', None)                   # per-goal RETRIEVER/gate shortlist: [C] bool (True=blocked); applies in train (sample) + eval (select) via this one choke point
+        if ab is not None:
+            logits[:, 1:] = logits[:, 1:].masked_fill(ab.unsqueeze(0), NEG_INF)
         return logits
 
     @torch.no_grad()
