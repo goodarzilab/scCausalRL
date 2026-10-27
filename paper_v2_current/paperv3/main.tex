@@ -1,0 +1,442 @@
+\documentclass{article}
+\usepackage{neurips_2026}          % submission (anonymous). swap to [preprint] or a workshop track option later.
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+% \usepackage[section]{placeins}
+\usepackage{placeins}
+\usepackage{flafter}
+\usepackage{float}
+\usepackage{courier}    % Type-1 monospace for \texttt (avoids Type-3 bitmap cmtt; NeurIPS font rule)
+\newcommand{\PearsonDEG}{\ensuremath{\mathrm{Pearson}_{\mathrm{DEG}}}}  % drift-removed Pearson over DE genes
+
+% ---- scaffold helpers (remove before camera-ready) ----
+% \panel{figures/figN.pdf}: falls back to a labelled box until the vector PDF is dropped in.
+\newcommand{\panel}[2]{%
+  \IfFileExists{#1}{\includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{#1}}%
+  {\fbox{\parbox[c][3.5cm][c]{0.98\linewidth}{\centering\ttfamily\small #2 \\[2pt] (panel PDF pending)}}}}
+\newcommand{\plan}[1]{\medskip\noindent\textcolor{gray}{\small[\textsc{plan}: #1]}\medskip}
+\newcommand{\ev}[1]{\textcolor{blue!55!black}{\small\{ev: #1\}}}   % grounded-evidence anchor
+
+\title{Compositional Perturbation Planning with a Generative Structural Causal World Model}
+\author{Anonymous submission}   % blind
+\raggedbottom
+\renewcommand{\topfraction}{0.98}
+\renewcommand{\textfraction}{0.02}
+\setcounter{topnumber}{2}
+\setcounter{totalnumber}{3}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Multi-gene intervention planning is critical to achieve a desired final cell state from either an embryonic stem or an intermediary cell state, while modeling epistatic gene interactions. Current perturbation foundation models are not reliably trained to predict multi-gene perturbations and are conditional-mean estimators rather than intervention operators, so composing perturbations under a reinforcement learning (RL) policy queries the model off-distribution. Here we propose a generative structural causal world model in which transcription factor (TF) perturbations are modeled as latent interventions with support for multi-perturbations where any \emph{k}-factor combination is solved in closed form rather than rolled out, making model exact and compositional under unseen combinations. On held-out gene knockouts, the model beats baselines on both single and combination perturbations with up to eight TF cocktails, and it predicts held-out pairwise epistasis under leave-one-TF-out
+cross-validation. This non-additive interaction is learned from incorporating combination-TFs in training through a unique interaction head routed through the latent graph, leading to the model scoring held-out experimentally validated epistatic TF combinations high for their predicted
+interaction. Given this trained causal world model identifiable under novel multi-gene perturbations, we built a planner agent to learn transformations from human embryonic stem cells (hESCs) to downstream annotated fates including hematopoietic stem and progenitor cells (HSPC). We implement a goal-conditioned GFlowNet policy that proposes TF cocktails scored by the frozen world model's do-operator. The policy generalizes to held-out fate signatures and recovers held-out driver TFs of the hESC-to-HSPC screen, matching
+model-predictive-control (MPC) search at a fraction of the cost while proposing far more diverse cocktails, and it surfaces canonical hematopoietic master regulators
+including TAL1, KLF2, and HOXB4 on a zero-shot HSPC fate.
+\end{abstract}
+
+\section{Introduction}
+Directing a cell to a target fate is the central problem of cellular reprogramming, and it is
+combinatorial as fates are reached by overexpressing curated sets of transcription factors (TFs),
+delivered together at high multiplicity of infection (MOI) and read out days later as a
+differentiated state \citep{joung2023tfatlas,briggs2026}. The cocktail design space is
+astronomically large, making cell-fate design a natural target for a model-based planner, proposing TF cocktails for unseen fates. Such a planner needs a world model that predicts the
+outcome of novel and simultaneous multi-TF interventions. Current perturbation foundation models fit this role poorly. scGPT, scFoundation, GEARS, and STATE
+\citep{cui2024scgpt,hao2024scfoundation,roohani2024gears,adduri2025state} are trained as
+conditional-mean predictors that transfer a perturbation's effect across cellular contexts.
+In this high MOI combinatorial regime, these models do not reliably beat additive or linear
+baselines \citep{ahlmanneltze2025,perturbench2024}. This causes a more critical issue for planner or reinforcement learning agents, as these models, acting as amortized conditionals rather than intervention operators, give no compositional or identifiability guarantee for unseen combinations, so a
+policy that composes TFs veers the model off-distribution and compounds single-step error. Trained for
+single-step conditional means, they also do not capture the simultaneous high-MOI biology of these screens.
+
+Similar work, like DiRL, couples goal-conditioned RL with a single-cell foundation model as a differentiable
+world model \citep{dirl2025}. There, however, the world model, the reward, and the success metric
+all live in one foundation-model embedding space with no external ground truth, and the reward
+is proximity in the model's own latents, validated only post hoc, which forces the foundation model itself to
+stand in as ground truth, a strong and untested assumption. Here we instead require a world model whose
+structure is testable, exact and identifiable under multiple perturbations, and a planner scored against
+experimental driver answer keys. We use two human embryonic stem cell (hESC) screens that separate complementary signals. Joung et al. overexpresses single TFs, read
+out at an early differentiating intermediate (day 7), isolating each TF's directional effect
+\citep{joung2023tfatlas}, and Briggs et al. overexpresses TF \emph{combinations} at high MOI, read out at a
+committed hematopoietic stem and progenitor cells (HSPC)-like state (days 14--28), giving true combinatorial fate outcomes
+\citep{briggs2026}. Target-fate annotations, apart from the recovered HSPC fate, come from the human fetal cell atlas for both Joung and Briggs \citep{cao2020fetal}.
+
+\textbf{Contributions.} \textbf{(1)} We build a generative structural-causal world model that
+predicts the effect of a $k$-TF intervention in one closed-form solve (Eq.~\ref{eq:doop}). The
+model composes any unseen combination directly from its single and combo-TF training data, predicting perturbation outcomes of novel combinations. The model beats a fair additive
+baseline on held-out single and combination perturbations and predicts held-out epistasis on experimentally validated TF pairs. 
+\textbf{(2)} We pair this world model with a goal-conditioned GFlowNet planner that samples diverse TF cocktails
+scored by the frozen do-operator, recovering key TF drivers. \textbf{(3)} Lastly, we
+evaluate the planner against experimental driver lists, finding that it matches model-predictive control (MPC) search at far lower cost with greater cocktail diversity, and surfaces held-out and zero-shot hematopoietic drivers.
+
+\section{A structural causal world model}\label{sec:wm}
+\begin{figure}[!t]\centering\panel{figures/fig1.pdf}{Fig 1 WM arch}
+\caption{\textbf{Structural causal world model.} (A) Latent-DAG SEM with the shift-mutilate do-operator.
+(B) Masked gene-program (SENA) decoder $x{=}Dz$, columns tied to GO:BP programs. (C) A $k$-TF perturbation is
+one closed-form solve of the summed per-TF shifts, so prediction is exact, compositional, and
+zero-shot.}\label{fig:wm_arch}\end{figure}
+
+\textbf{Latent structural equation model.} We represent a cell as a latent state $z\in\mathbb{R}^{d}$
+over $d{=}357$ gene programs, one per Gene Ontology biological-process (GO:BP) gene set. An encoder
+$q_\phi(z\mid x)$ maps a cell's $4366$-gene expression $x$ to $z$. The programs follow a linear
+structural equation model (SEM) on a learned weighted directed graph $A\in\mathbb{R}^{d\times d}$ driven
+by an exogenous term $\epsilon$,
+\begin{equation}
+z = A^\top z + \epsilon, \qquad z_0 = (I-A^\top)^{-1}\epsilon_0 
+\end{equation}
+A linear decoder reads programs back to genes, $\hat{x}=Dz$ with $D\in\mathbb{R}^{4366\times d}$.
+Following the masked-decoder (SENA) construction \citep{sena2025,zhang2023discrepancyvae}, column $j$ of
+$D$ is tied to program $j$ by a GO:BP membership mask $M$. The effective weight is $D\odot M$ (i.e. a gated decoder), so a gene
+loads fully on programs that have that gene enriched for and shrunk by a leak factor $\lambda{=}0.3$
+for unannotated programs. This pins each latent axis to a named program and forces gene covariance to route through the
+programs and $A$ rather than through free gene-gene weights.
+
+\textbf{Perturbation as a soft intervention.} Here we represent the overexpressing transcription factor (TF) $g$ enters as a
+program-space shift, or shift encoder [put LCCVAE citation here],  $S_g\in\mathbb{R}^{d}$ added to the exogenous term, $S_g=f_\theta(e_g)$. The
+descriptor $e_g$ is a $100$-dimensional embedding of the TF's amino-acid sequence from the PCA-reduced and z-scored embedding of that gene from the ESM2 protein
+language model \citep{lin2023esm2}. ESM2 embeds any TF, including held-out
+ones, which is what lets a shift transfer zero-shot to unseen factors, and sequence-similar TFs receive
+similar shifts. To predict the latent effect of this intervention shift, we introduce a per-program mutilation gate $u\in[0,1]^{d}$ on the latent graph \emph{A}, that allows for a learned continuous edge weight scaling of the latent edge as opposed to full removal, through scaling the
+incoming edges of an intervened program by $(1-u)$.
+
+\textbf{Exact, compositional multi-perturbation.} For a set $\mathcal{P}$ of perturbed TFs the intervened
+latent $z_{post}$ is derived from the following closed-form solve,
+\begin{equation}
+z_{\mathrm{post}} = \big(I-\mathrm{diag}(1-u)\,A^\top\big)^{-1}
+\Big(\epsilon_0 + \textstyle\sum_{g\in\mathcal{P}} S_g + S_{\mathrm{int}}(\mathcal{P})\Big),
+\qquad \hat{x}=Dz_{\mathrm{post}},
+\label{eq:doop}
+\end{equation}
+with $u=\max_{g\in\mathcal{P}}u_g$. A $k$-TF prediction is the exact solution of the same SEM, built from
+the same per-TF shifts used for singles, so it is compositional and zero-shot with no
+combination-specific parameters. We also introduced an interaction term $S_{\mathrm{int}}(\mathcal{P})$ which is a low-rank ($r{=}32$)
+interaction head that adds a set-dependent latent shift to the total interventional shift. It is zero-initialised and trained only on
+combinations ($|\mathcal{P}|\ge 2$), so it vanishes for single TFs and supplies the non-additive part of
+a combination, allowing us to model epistatic interaction routed through the latent graph \emph{A}.
+
+\textbf{Training objective} We train the model once for $60$ epochs with
+\begin{equation}
+\mathcal{L}=\mathcal{L}_{\mathrm{rec}}+\beta\,\mathcal{L}_{\mathrm{KL}}
++\lambda_{\mathrm{pert}}\,\mathcal{L}_{\mathrm{pert}}+\lambda_{\mathrm{spec}}\,\mathcal{L}_{\mathrm{spec}}.
+\end{equation}
+$\mathcal{L}_{\mathrm{rec}}{=}\lVert\hat{x}-x\rVert^2$ is the reconstruction MSE and
+$\mathcal{L}_{\mathrm{KL}}$ the diagonal-Gaussian VAE term with $\beta$ annealed $0.01{\to}0.5$. The
+perturbation term ($\lambda_{\mathrm{pert}}{=}10$) is computed on cell sentences of $64$ cells so its
+target is a per-perturbation pseudobulk change $\Delta$, and it sums four parts. A mean-shift MSE
+$\lVert\Delta_{\mathrm{pred}}-\Delta_{\mathrm{obs}}\rVert^2$ matches the average response. A Gaussian-RBF
+maximum-mean-discrepancy $\mathrm{MMD}^2$ matches the full predicted and observed perturbed-cell
+distributions, not only their mean. A symmetric InfoNCE term (temperature $0.2$) pushes each predicted
+profile toward its own perturbation and away from others. A DE-gene MSE weighted $8\times$ preserves
+per-gene response magnitude on the differentially expressed genes. The spectral term
+$\mathcal{L}_{\mathrm{spec}}{=}\mathrm{relu}(\sigma_{\max}(A)-0.95)$ keeps the SEM solve well-conditioned. More details on the architecture can be found in Appendix~\ref{app:model_full}.
+
+\FloatBarrier
+\section{Prediction, non-additivity, and a load-bearing causal graph}\label{sec:pred}
+\begin{figure}[!tp]\centering\includegraphics[width=0.92\linewidth]{figures/fig2.pdf}
+\caption{\textbf{Held-out prediction beats a fair additive baseline.} (A) Single-TF prediction against ESM- and
+co-expression-retrieval baselines (drift-removed \PearsonDEG and discrimination). (B) Held-out combinations
+against the same-context additive baseline. (C) Metrics against perturbation order $k$. (D) The world-model
+advantage grows with order. Mean over three seeds, SEM error bars, $n$ per panel.}\label{fig:pred}\end{figure}
+
+\textbf{Setup and training.} We train the world model on two overexpression screens, the Joung single-TF atlas and the Briggs
+combinatorial TF screen, over a shared $4366$-gene axis with $d{=}357$ GO:BP program latents, trained in two stages. First we fit a base model on single-TF perturbations, which learns one shift per TF. Then we
+finetune this base on TF combinations, and we oversample the single-TF examples $8\times$ so the model keeps
+its single-TF accuracy as it learns combinations. We build two checkpoints from this recipe. The deployable
+checkpoint trains on all $495$ single-TF perturbations and all $1622$ combinations (arrayed Joung pairs and
+pooled Briggs sets of up to eight TFs) and holds out only the $222$ Briggs HSPC-reaching validated combinations. However, for the held out predictions shown in Fig.~\ref{fig:pred}, we train a similar model with held out single and combination TFs with a  $85\%/80\%$ single/combination split across
+three seeds, alongside sampled replays of earlier training data during finetuning to ensure model won't forget single-TF level prediction, and we report the held out values on this sibling model. For the downstream policy training, we
+split fate targets by fate name into disjoint folds and always hold out the HSPC fate. Appendix~\ref{app:data}
+gives the full data, splits, and hyperparameters along with methodological details.
+
+
+
+\textbf{Evaluating the World Model} Overexpressing any TF at high MOI produces a large response that is largely shared across factors — a generic overexpression signature, pronounced here because many assayed TFs are master regulators. This shared component is a confound: a model that predicts it for every perturbation scores well on raw correlation while distinguishing no TF from any other, which is precisely the mechanism by which deep models tie simple baselines on published benchmarks  \citep{ahlmanneltze2025}. We therefore evaluate on the TF-specific residual. We estimate the drift as the mean single-TF $\Delta$ over the training set only, subtract it from both prediction and observation, and report two drift-removed quantities. $\mathrm{Pearson}_{\mathrm{DEG}}$ is the Pearson correlation between the drift-removed
+predicted and observed change on the perturbation's differentially expressed (DE) genes (log-fold-change
+above $0.1$, with the perturbed TF excluded), and measures whether the predicted response has the right
+shape. Discrimination ($\mathrm{disc}$) is the area under the ROC of matching a prediction to its own
+held-out perturbation against all others by drift-removed similarity, and measures whether the response
+is specific to the right TF rather than a generic perturbation signature. We compare against a
+same-context additive baseline that sums observed single-TF $\Delta$ vectors, a no-change baseline, and a
+context-mean baseline \citep{ahlmanneltze2025}. For single-TF prediction we add two retrieval baselines
+that copy the drift-removed response of the nearest training TF, by ESM2 similarity or by co-expression.
+
+\textbf{Held-out single-TF prediction.} On held-out single TFs the world model is competitive with the
+strongest baseline and far more specific (Fig.~\ref{fig:pred}A). On held-out Joung single TFs it
+matches the ESM2 nearest-neighbour copy in $\mathrm{Pearson}_{\mathrm{DEG}}$ ($0.50$ against $0.51$) but
+separates the perturbations much better in discrimination ($0.83$ against $0.58$), and on Briggs single-TF
+effects, a cross-screen test to see whether model, that only saw Briggs combinations, can still generalize to singles, it outperforms every baseline on both
+metrics for single TF perturbation prediction.
+
+
+\textbf{The world model beats a fair additive baseline on combinations.} Now, testing the models performance on predicting combos of TFs given a cocktail set $S$, on held-out combinations, the
+model beats the same-context additive baseline by $0.18$ to $0.23$ in $\mathrm{Pearson}_{\mathrm{DEG}}$,
+a gain of $+0.184$ on the $222$ held-out answer-key combinations ($p{=}2.8\times10^{-21}$) and $+0.225$
+on the $304$ held-out combinations ($p{=}8.4\times10^{-49}$) over three seeds (Fig.~\ref{fig:pred}B). The
+advantage persists to high order. At $k{=}6$ to $8$ TFs the model reaches discrimination $0.84$ and
+$\mathrm{Pearson}_{\mathrm{DEG}}$ $0.38$ against $0.53$ and $0.15$ for the additive baseline ($n{=}86$,
+$p{=}3.1\times10^{-15}$), and it beats additive on $95\%$ of held-out combinations (Fig.~\ref{fig:pred}C,D),
+so the non-additive margin grows with combination order.
+
+\begin{figure}[t]\centering\includegraphics[width=0.92\linewidth]{figures/fig3.pdf}
+\caption{\textbf{Combinatorial epistasis, and a load-bearing causal graph.} (A) Predicted against observed
+interaction on $n{=}276$ held-out Briggs combinations ($r{=}0.70$). (B) A singles-only model captures none.
+(C) Concordance rises with combination order. (D) An example held-out combination. (E, F) Single-TF and
+combination prediction under original, reversed, symmetrized, and shuffled $A$, over $n{=}66$ held-out single
+transcription factors and $n{=}14$ held-out combinations. Bars are point estimates tested against a
+$1000$-shuffle-$A$ permutation null (stars) and a paired Wilcoxon over the held-out units ($p{=}9\times10^{-11}$
+and $6\times10^{-5}$). Reversing the edges is as damaging as shuffling, so the dependence is directional
+(drift-removed Pearson gaps of $0.69$ and $0.10$ over the null).}\label{fig:epi}
+\end{figure}
+% -- get p value for the bars
+% -- LFC threshold on the DE genes
+% -- subtext
+
+\textbf{Epistasis is captured, and it comes from the interaction head.} We measure the interaction, or
+net epistasis, as the combination response minus the sum of its single-TF responses. On held-out
+combinations the model predicts the observed interaction at Pearson $r{=}0.70$ over $n{=}276$ Briggs
+combinations (Fig.~\ref{fig:epi}A). The signal is concentrated in higher order. Broken out by order, the
+held-out concordance is near chance for pairs and triples ($k{=}2$--$3$, $r{=}0.03$) and strong for
+larger cocktails, reaching $r{=}0.66$ at $k{=}4$--$5$ and $r{=}0.83$ at $k{=}6$--$8$
+(Fig.~\ref{fig:epi}C). This is exactly the part the model learns through the rank-$32$ interaction head
+of \S\ref{sec:wm}. A singles-only model, whose head is never trained and stays zero, captures none of it
+($r_{\mathrm{pair}}{=}0.06$), while the combination-trained model reaches $r_{\mathrm{pair}}{=}0.70$
+(Fig.~\ref{fig:epi}B). The model recovers the sign and ranking of the interaction but not its magnitude,
+which shows up as a sub-additive offset we report rather than hide.
+
+\textbf{Is the causal graph load-bearing?}\label{sec:causal} Prediction accuracy alone does not tell us whether the
+latent structural causal graph $A$ is actually \emph{used} for prediction, or whether it is an inert byproduct of
+training. We test this by ablating $A$ inside the frozen do-operator and re-measuring prediction, and we then
+characterize the biological structure of the learned graph.
+
+\textbf{The directed graph is load-bearing for prediction} (Fig.~\ref{fig:epi}E). We ablate $A$ inside the
+frozen do-operator by reversing, symmetrizing, or shuffling its edges, and re-measure
+$\Delta$-prediction on the deployable model (a relative true-vs-shuffled comparison on the same
+perturbations, so it does not need a held-out split). Against a 1000-shuffle null, single-TF prediction collapses from
+Pearson $0.536\,[0.443,0.625]$ to a shuffled mean of $-0.156\pm0.010$, a gap of $0.692$ that no shuffle approaches (permutation $p<0.001$, $0/1000$, paired Wilcoxon across $66$ TFs
+$p{=}8.9\times10^{-11}$, App.~\ref{app:causalsupp}), and $59$ of $66$ TFs individually
+predict worse under a shuffled graph (App.~\ref{app:causalsupp}). Reversing the direction of edges is as damaging as shuffling
+them, so the dependence is on edge \textit{direction}, not connectivity alone, the signature of the continuous do-operation and interventional training.  The same directional dependence holds on combinations, where all 14 held-out sets predict worse under a shuffled graph (gap $0.102$, permutation $p<0.001$,
+Wilcoxon $p{=}6.1\times10^{-5}$). The effect is consistent across metrics as well. Reversing or shuffling $A$ collapses cross-fate discrimination
+AUROC from $0.84$ to $0.60$ for single TFs (Fig.~\ref{fig:epi}E,F), and top-1 driver recall from $0.73$ to
+$0.02$ (App.~\ref{app:causalsupp}).
+
+\textbf{The latent graph is biologically structured.} The masked decoder pins each
+latent axis to a named GO:BP program at mask coherence $1.00$, and the learned adjacency $A$ is a sparse signed
+graph over those programs whose highest-connectivity hubs are developmental programs. Compared against known
+biological priors (CollecTRI, DoRothEA, STRING), the projected graph carries above-chance signal but does not
+beat a plain co-expression control, as expected for a context-specific model trained prior-off on TFs alone. We
+therefore make no claim of literal GRN recovery and restrict the causal claim to prediction
+(Sec.~\ref{sec:limits}).
+
+\section{A goal-conditioned GFlowNet planner}\label{sec:planner}
+\begin{figure}[t]\centering\panel{figures/fig4.pdf}{Fig planner: GFlowNet over frozen world model}
+\caption{\textbf{Goal-conditioned GFlowNet planner.} A target fate conditions a trajectory-balance GFlowNet that
+proposes a TF cocktail. The frozen do-operator propagates the injected shifts over the learned causal graph $A$ to
+predict the $\Delta$ state, and the reward measures closeness to the target. The policy is trained by the
+trajectory-balance gradient with a goal-conditioned $\log Z$ head.}\label{fig:planner_arch}\end{figure}
+
+\textbf{Planning against the frozen causal world model.} Given a target fate we want to propose TF cocktails that
+steer a control cell toward it, without re-running a search for every new fate. We train a goal-conditioned
+policy that proposes a cocktail. The frozen do-operator of \S\ref{sec:wm} predicts the resulting $\Delta$ state
+by propagating the injected shifts over the learned causal graph $A$, and the reward $\Phi(x,g)$ is the
+drift-removed agreement of that predicted $\Delta$ with the target fate's observed signature
+(Fig.~\ref{fig:planner_arch}). The causal graph is the planner's prior: through the do-operator it defines which
+cocktails are predicted to reach which fates. At deployment the policy proposes candidates directly, with no
+per-fate search.
+
+\textbf{Why a GFlowNet, conditioned on the goal.} Many distinct TF sets can steer a cell to the same fate, so we
+want a planner that \emph{samples} diverse cocktails in proportion to reward rather than collapsing onto a single
+mode. We train a trajectory-balance GFlowNet \citep{bengio2021gflownet} whose partition-function head is
+conditioned on the target fate, $\log Z(g)$. This goal-conditioning is what lets the policy spread its mass
+across modes. A shared $\log Z$ head instead collapses onto the reward argmax (App.~\ref{app:rl}).
+
+\textbf{An ensemble-pessimistic reward.} Because the world model is an imperfect oracle that a planner could
+exploit, we score each cocktail under an ensemble of $K{=}6$ independently trained world models and reward the
+pessimistic estimate $\Phi_{\mathrm{pess}} = \mathrm{mean}_k\,\Phi^{(k)} - \lambda\,\mathrm{std}_k\,\Phi^{(k)}$,
+which penalizes cocktails the ensemble disagrees on. A modest $\lambda{=}0.25$ gave the best
+recovery--diversity trade-off. The policy head is a plain per-slot multilayer perceptron over the shared
+candidate vocabulary. Full training and hyperparameter details are in App.~\ref{app:hparams} and the complete
+cross-arm evaluation in App.~\ref{app:rl}.
+
+\FloatBarrier
+\section{Cell-fate design results}\label{sec:rl}
+\begin{figure}[t]\centering\includegraphics[width=0.86\linewidth]{figures/fig5.pdf}
+\caption{\textbf{Cell-fate design: recovery, diversity, and zero-shot HSPC.} Recovery panels use the elite
+(top-$10\%$-by-reward) readout on $n{=}41$ held-out Briggs fates, budget-matched to model-predictive control
+(MPC), additive, and random baselines on the same fates. (A) Briggs recovery across four metrics (mean$\pm$SEM
+over fates). (B) Per-fate elite recall@$20$, policy minus each baseline (one dot per fate): parity with MPC (ns),
+far above additive and random ($p<10^{-4}$). (C) Distinct high-quality cocktails from $256$ HSPC-pool proposals.
+(D) Arrayed-key TFs the policy proposes zero-shot on the held-out HSPC fate, bar is the fraction of $11$ runs
+proposing each, colored canonical hematopoietic versus other. (E) Coverage of the $54$-TF Briggs arrayed key
+($28$ combinations), elite recall@$50$ and distinct drivers surfaced, policy versus baselines.}\label{fig:rl}\end{figure}
+
+\textbf{Protocol.} We evaluate the planner on four target-fate sources (Joung single- and combination-defined
+fates, the Briggs hESC-to-HSPC screen, and a held-out zero-shot HSPC fate) under a leakage-clean fold-by-name
+split over five seeds and three folds. The policy draws $N{=}256$ candidate cocktails per fate, read out by their
+elite (top-decile by reward) frequency at no extra world-model cost. We compare against budget-matched baselines:
+model-predictive control (MPC, beam search over the same shortlist, ${\approx}9{,}240$ world-model evaluations per
+fate), a greedy beam-$1$ variant, an additive single-TF baseline, and random shortlists. Because the elite readout
+is reward-guided, its chance level is a reward-matched null, and we test each method's gain over it with a paired
+Wilcoxon across held-out fates. App.~\ref{app:metrics} defines every metric.
+
+\textbf{Recovery matches exact search and dominates the heuristics, at a fraction of the compute}
+(Fig.~\ref{fig:rl}A,B). On the $41$ held-out Briggs fates the policy beats the budget-matched additive and random
+baselines on every metric by a wide margin (paired per-fate Wilcoxon $p<10^{-4}$ throughout), recovering $0.58$ of
+the answer-key drivers at elite recall@$20$ against $0.01$ and $0.07$ for the additive and random baselines.
+Against exact model-predictive control (MPC) beam search it is at parity on the broad metrics, elite recall@$20$
+$0.58$ against $0.51$ and soft driver recall@$20$ $0.80$ against $0.72$ (paired Wilcoxon $p{=}0.1$ and $0.2$, not
+significant, Fig.~\ref{fig:rl}B), and it is significantly \emph{ahead} at the top of the ranking, recall@$5$
+$0.36$ against $0.24$ and precision@$5$ $0.20$ against $0.13$ (both $p<0.05$). It reaches this while drawing its
+$256$ cocktails with ${\approx}36\times$ fewer world-model evaluations than beam search, an amortized single pass.
+By source the recovery concentrates on Briggs, the two Joung sources sitting near the matched-null floor
+(App.~\ref{app:rl}).
+
+\textbf{Composition, not addition, is what the planner exploits.} The recovered cocktails are large, six to eight
+transcription factors on the Briggs fates, and their predicted effect is strongly non-additive. This is the same
+higher-order interaction the world model captures on held-out combinations, where concordance rises from near
+chance for pairs to $r{=}0.83$ at order six to eight (Fig.~\ref{fig:epi}C), and it is exactly what an additive
+single-TF baseline cannot represent, which is why that baseline sits at the null. The planner inherits this
+combinatorial structure through the do-operator and uses it to assemble sets whose joint predicted effect exceeds
+the sum of their single-TF parts.
+
+\textbf{The policy is diverse at fixed quality, and search is not} (Fig.~\ref{fig:rl}C). For each held-out HSPC
+fate we draw $256$ candidate cocktails from each method and set an arm-independent quality bar at the $75$th
+percentile of the reward of matched-random cocktails, then count how many \emph{distinct} cocktails each method
+proposes \emph{above} that bar, so the metric credits diversity only among high-reward designs and not a flood of
+low-quality ones. The policy returns roughly $160$ such distinct high-quality cocktails, a random sampler $64$,
+and beam search $1$, as beam is a single-solution optimizer rather than a sampler. Diversity at fixed quality, not
+raw recovery, is where amortization is uniquely useful, handing an experimentalist many equally good candidates to
+array rather than one.
+
+\textbf{Zero-shot HSPC is a diversity-coverage advantage} (Fig.~\ref{fig:rl}D,E). We test the frozen policy
+zero-shot on a held-out hESC-to-HSPC fate against the Briggs arrayed answer key ($54$ driver TFs across $28$
+arrayed-validated combinations). On this broad key the policy's diverse elite proposals cover far more of
+the answer key than search or the heuristic baselines, an arrayed recall@$50$ of $0.13$ against $\le0.06$ and
+$15$ of the $54$ drivers surfaced across runs against $3$--$4$ for the baselines (Fig.~\ref{fig:rl}E). The
+proposed factors are biologically coherent (Fig.~\ref{fig:rl}D): with the regulatory prior switched off the
+policy nominates the canonical hematopoietic regulators LYL1, KLF1, KLF2, and IKZF1 in nearly every run, and
+members of the blood stem-cell heptad \citep{wilson2010heptad}, TAL1/SCL, GATA2, RUNX1, and FLI1, together with
+the stem-cell self-renewal factor HOXB4 \citep{antonchuk2002hoxb4}, in a minority of runs. This is a coverage
+advantage of a diverse proposer over narrow search, not a per-driver precision result. On the narrow twelve-TF
+named answer key the policy does not beat model-predictive control, and we do not calibrate a breadth-matched null
+for the arrayed key, both of which we report rather than hide in App.~\ref{app:rl}.
+
+\textbf{What the design choices buy} (App.~\ref{app:rl}). Goal-conditioning the partition function is what spreads
+sampling across modes, as a shared partition function collapses onto the reward argmax and loses the diversity
+above. The ensemble-pessimism weight $\lambda$ trades recovery against diversity, with $\lambda{=}0.25$ at the
+knee, and the plain per-slot policy head matches heavier alternatives, so the amortization gain is not an artifact
+of head capacity.
+
+\textbf{Honest limits.} The cocktails point toward the target fate in world-model $\Delta$-direction
+(own-minus-other cosine $+0.25$ on Briggs, $+0.19$ on HSPC) but do not discriminate fates by answer-key overlap, a
+cross-fate discrimination wall (policy well below the driver oracle) we report rather than hide. The two Joung
+sources are not significant, a training-data coverage limit rather than a method failure (Sec.~\ref{sec:limits}).
+
+\textbf{Takeaway.} The planner is an amortized proposer rather than an oracle. On the well-powered Briggs source it
+reaches the recovery of exact search at a small fraction of the world-model compute and returns two orders of
+magnitude more distinct high-quality cocktails, and on a fully held-out HSPC fate its diverse proposals cover more
+of the arrayed answer key with biologically coherent regulators than search does. The two Joung fate sources,
+with only six and two held-out fates and one-to-five-TF answer keys, are underpowered and sit at the matched
+null, and where fates share drivers the policy cannot yet separate them. We read these as evaluation and
+discrimination frontiers for the next round of screens and models, not as evidence against amortized fate design.
+
+\FloatBarrier
+\section{Related work}\label{sec:related}
+\textbf{Models of perturbation response.} Our world model descends from causal-disentanglement variational
+autoencoders with soft interventions, including Discrepancy-VAE \citep{zhang2023discrepancyvae}, its
+gene-ontology-structured variant SENA \citep{sena2025}, sparse additive mechanism-shift autoencoders
+\citep{samsvae2023}, and Biolord \citep{biolord2024}, all of which amortize the response through an encoder pass.
+We differ by treating the learned structural equation model as a frozen simulator whose multi-perturbation
+response is an exact fixed-point solve (Eq.~\ref{eq:doop}), which is what makes zero-shot composition of unseen
+cocktails well defined. This exact-by-design choice is motivated by audits showing that deep perturbation
+predictors do not reliably beat simple additive or nearest-neighbor baselines on held-out perturbations
+\citep{ahlmanneltze2025,perturbench2024}, and training with the regulatory prior off follows benchmarks showing
+that context-independent priors can hurt context-specific inference \citep{genernib2025}.
+
+\textbf{Planning and amortized diverse sampling.} Concurrent work couples goal-conditioned reinforcement learning
+to a single-cell foundation model \citep{dirl2025}, recovers reprogramming protocols from fitted network dynamics
+\citep{wytock2024}, or searches directly for reprogramming transcription factors \citep{tfcomb}. These optimize
+against a learned predictor or search a model once per target. We instead sample cocktails in proportion to a
+frozen structural-causal reward with a generative flow network \citep{bengio2021gflownet}, whose calibrated
+diversity fits fate design because many transcription-factor sets reach the same fate. Goal-conditioning the
+partition function lets one policy serve many fates, turning per-fate search into an amortized proposer.
+
+\section{Limitations and conclusion}\label{sec:limits}
+\textbf{Limitations.} The learned graph is load-bearing for prediction but is not a recovered gene-regulatory
+network, so we restrict the causal claim to prediction and leave a rotational ambiguity in the adjacency $A$
+unresolved (Sec.~\ref{sec:pred}). The captured epistasis is higher-order, near chance for pairs and strong only
+for larger cocktails, and its magnitude is uncalibrated even where its sign and ranking are right. On planning,
+the two Joung fate sources are not significant, but that evaluation is underpowered rather than a method failure,
+with only six single-defined and two combination-defined held-out fates carrying one-to-five-TF answer keys, and
+the world model is itself trained on the Joung data. A cross-fate discrimination wall also remains for fates
+defined only by a coarse expression signature. We expect more held-out fates and richer fate representations to
+resolve both.
+
+\textbf{Conclusion.} A frozen structural causal world model gives exact, compositional, zero-shot
+multi-perturbation predictions, and a goal-conditioned generative flow network planner over it designs cell-fate
+cocktails that match exact search at a fraction of the compute, propose far more diverse cocktails, and on a
+zero-shot HSPC fate cover more of the hematopoietic answer key with biologically coherent regulators than search
+does. We report where the approach works and where it does not, so the result is usable rather than oversold.
+
+\FloatBarrier
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\input{appendix_expanded.tex}
+
+\section{Fate-space annotation QC}\label{app:fates}
+Appendix~\ref{app:data} defines the fate targets and their counts. Here we give the keep-rule that decides which
+merged groups become fates. We keep a merged group only if it is a genuine and separable mode, which we test by
+a positive mean per-fate silhouette in the drift-removed program space together with a minimum-member count. We
+iterate this rule to convergence and report robustness over a sweep of the merge cut and the minimum-member
+count. This data-driven rule replaces an arbitrary isolation cutoff and applies uniformly across the sources.
+
+\section{Causal validation: significance and per-TF breakdown}\label{app:causalsupp}
+The main-text edge-direction ablation (Fig.~\ref{fig:epi}E,F) reports a point gap. Here we give its null
+distribution and its per-TF consistency. Fig.~\ref{fig:causalsupp}A places the observed single-TF mean
+$\Delta$-Pearson ($+0.54$, $95\%$ CI shaded) against a $1000$-shuffle-$A$ null, which no shuffle reaches ($0/1000$
+exceed, permutation $p<0.001$, paired Wilcoxon across $66$ TFs $p{=}8.9\times10^{-11}$).
+Fig.~\ref{fig:causalsupp}B breaks the ablation out per held-out TF, where $59$ of $66$ TFs individually predict
+worse under a shuffled graph, so the effect is not an averaging artifact.
+\begin{figure}[H]\centering\panel{figures/fig6.pdf}{App causal-supp A:null-hist B:per-TF}
+\caption{\textbf{Edge-direction ablation, significance and per-TF breakdown.} (A) $1000$-shuffle-$A$ null against
+the observed single-TF mean $\Delta$-Pearson ($0/1000$ exceed, $p<0.001$). (B) Per-TF original against shuffled
+$\Delta$-Pearson, with $59$ of $66$ below the diagonal.}\label{fig:causalsupp}\end{figure}
+
+\section{Planner training and generalization}\label{app:plannersupp}
+Fig.~\ref{fig:plannersupp}A shows the goal-conditioned GFlowNet training dynamics. The trajectory-balance
+objective converges and the policy keeps drawing from nearly the full candidate pool (about $280$ distinct TFs),
+so it does not mode-collapse at the TF level, and the cocktail-level diversity is quantified in App.~\ref{app:rl}.
+Fig.~\ref{fig:plannersupp}B compares in-domain against held-out driver recall by source. Held-out performance
+tracks in-domain, so the planner does not overfit the training fates.
+\begin{figure}[H]\centering\panel{figures/fig7.pdf}{App planner-supp A:training B:indom-vs-heldout}
+\caption{\textbf{Planner training and generalization.} (A) Trajectory-balance loss and distinct-TF count over
+training for the flagship conditional GFlowNet (loss $170\to1$, distinct TFs $\to280/280$). (B) In-domain against
+held-out driver recall@$20$ (elite readout) per source. Briggs generalizes cleanly ($0.56$ held-out), while the
+two small Joung sources (six and two held-out fates) stay near the floor.}\label{fig:plannersupp}\end{figure}
+
+\section{Broader impacts}\label{app:impact}
+This work provides a computational method for proposing transcription-factor cocktails that steer cell fate. Its
+intended positive impact is to speed up hypothesis generation for cellular reprogramming and regenerative
+medicine and to reduce the combinatorial screening burden. The potential negative impacts are limited. The
+outputs are in-silico hypotheses derived from public single-cell datasets, and they require wet-lab validation
+before any use, so there is no direct path to harmful deployment. The main practical risk is misallocated
+experimental effort if the predictions are over-trusted. We mitigate this risk by reporting calibrated error
+bars and significance, by stating honest negatives, and by delimiting where the method fails
+(Sec.~\ref{sec:limits}).
+
+\newpage
+\input{checklist.tex}
+
+\end{document}

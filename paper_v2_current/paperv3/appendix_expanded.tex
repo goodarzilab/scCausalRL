@@ -1,0 +1,881 @@
+% =============================================================================
+%  EXPANDED APPENDIX  --  \input after \appendix in main.tex
+%  No preamble, no \begin{document}. Sequence of \section blocks only.
+%  Notation matches main.tex (z, A, S_g, u, D, Eq.~\ref{eq:doop}).
+% =============================================================================
+
+\section{Model and objective in full}\label{app:model_full}
+This section gives the world model and its training objective at the level of exact
+shapes and hyperparameters. All shapes below are those of the deployed world model at
+epoch $60$. The gene axis has $G{=}4366$ genes and the latent has $d{=}357$ gene
+programs. The decoder weight has shape $4366\times357$, the latent directed graph $A$ has
+shape $357\times357$, and the per-TF label matrix has shape $4366\times100$.
+
+\subsection{Encoder and latent variables}
+The encoder is an amortized Gaussian. It reads a cell expression vector
+$x\in\mathbb{R}^{4366}$ concatenated with a $16$-dimensional modality embedding
+(Joung is modality $0$, Briggs is modality $1$) and maps the $4382$-dimensional input
+through a hidden layer of width $512$ to a mean $\mu$ and log-variance
+$\log\sigma^2$ over the exogenous term $\epsilon\in\mathbb{R}^{357}$. The first encoder
+weight therefore has shape $512\times4382$ and the modality embedding table has shape
+$2\times16$. We sample $\epsilon$ with the standard reparameterization. The
+observational forward pass solves the latent structural equation model (SEM) for $z$
+and decodes $x{=}Dz{+}b$.
+
+\subsection{The latent SEM and its closed-form solve}
+We model the resting latent state by a linear SEM over a learned signed directed graph
+$A\in\mathbb{R}^{357\times357}$ driven by $\epsilon$,
+\begin{equation}
+z \;=\; A^{\top} z + \epsilon
+\;\;\Longleftrightarrow\;\;
+(I-A^{\top})\,z=\epsilon
+\;\;\Longrightarrow\;\;
+z=(I-A^{\top})^{-1}\epsilon .
+\label{eq:sem_solve}
+\end{equation}
+The closed form follows because $I-A^{\top}$ is invertible whenever the spectral
+radius of $A$ is below $1$. We enforce that by a power-iteration spectral-norm clamp
+that rescales every sampled $A$ so $\lVert A\rVert_2 \le 0.85$, which guarantees
+$I-A^{\top}$ is nonsingular and every downstream solve is well posed. The solve itself
+is a direct linear solve with a sanitized escalating-ridge fallback for the rare
+early-training singular case. The adjacency is a factored Gumbel-sigmoid gate times a
+real-valued weight times a no-self-loop mask,
+$A_{ij}=\mathrm{gate}_{ij}\cdot w_{ij}\cdot(1-\delta_{ij})$, with
+$\mathrm{gate}_{ij}=\sigma((\theta_{ij}+\text{Gumbel})/\tau)$ in training and the hard
+threshold $\mathbf{1}[\sigma(\theta_{ij}/\tau)>0.5]$ at evaluation. The temperature
+$\tau$ anneals from $1.0$ to $0.25$ over training. At evaluation the graph is therefore
+deterministic and signed.
+
+\subsection{The shift-mutilate do-operator and $k$-TF composition}
+A perturbation of a transcription factor (TF) $g$ enters as a soft intervention with two
+parts. First it adds a program-space shift $S_g\in\mathbb{R}^{357}$. Second it applies a
+per-program mutilation gate $u_g\in[0,1]^{357}$ that partially severs incoming edges. For
+a set $\mathcal{P}$ of perturbed TFs the deployed operator sums the single-TF shifts,
+injects the sum into the exogenous term, forms one aggregate gate, and does one mutilated
+solve. This is Eq.~\eqref{eq:doop} of the main text. Concretely, in the structural
+intervention mode used throughout,
+\begin{align}
+S &= \textstyle\sum_{g\in\mathcal{P}} S_g \;(+\,S_{\mathrm{int}}), &
+\tilde{\epsilon} &= \epsilon_0 + S, \label{eq:doop_struct}\\
+u &= \operatorname*{mean}_{g\in\mathcal{P}} \operatorname{clip}\!\big(\beta\lvert S_g\rvert,\,0,\,1\big),\ \beta{=}1, &
+z_{\mathrm{post}} &= \big(I-\operatorname{diag}(1-u)A^{\top}\big)^{-1}\tilde{\epsilon}. \nonumber
+\end{align}
+Two design points matter. The gate $u$ is the per-single mean of $\operatorname{clip}(\beta\lvert S_g\rvert)$
+rather than $\operatorname{clip}(\beta\lvert\sum_g S_g\rvert)$. The summed form saturates
+about $41\%$ of programs to $u{=}1$ on combinations, which detaches $A$ and degrades
+combination prediction, so we use the per-single mean, which is identical for a single TF.
+In structural mode the shift is injected only into
+$\tilde{\epsilon}$, so any non-target program moves only through $A$. If $A{=}0$ there is
+no downstream effect, which is what makes $A$ load-bearing for prediction by construction.
+The operator reduces to the additive shift $z_{\mathrm{prev}}+z_S$
+when $u\to1$ on all driven programs and to predict-control when $u\to0$. Non-additivity
+for combinations arises because $u$, and hence $M=\operatorname{diag}(1-u)$, depends
+nonlinearly on the perturbed set. An optional symmetric low-rank interaction head adds a
+combination-specific shift $S_{\mathrm{int}}=W_{\mathrm{out}}\big(\tfrac12((\sum_i x_i)^2-\sum_i x_i^2)\big)$
+with $x_i=U(\text{ESM}_i)$ and an interaction rank of $32$. $S_{\mathrm{int}}$ is $0$ for a
+single gene. The operator is validated against a naive fixed-point solve. A $k$-TF
+prediction is therefore one linear solve assembled from
+the same single-TF shifts used for singles, exact and zero-shot for novel combinations.
+
+\subsection{Per-TF shift from ESM embeddings}
+The shift $S_g$ is produced by a learned shift encoder from a per-gene descriptor
+$\ell_g$. The descriptor is an ESM2 (Evolutionary Scale Modeling v2) protein language
+model embedding of the TF, reduced by principal component analysis and z-scored to $100$
+dimensions. The descriptor exists for
+any TF in the panel, including held-out TFs, which is what lets the shift generalize
+zero-shot. The encoder is a one-hidden-layer multilayer perceptron (MLP) of width $1024$
+with a LeakyReLU$(0.2)$ nonlinearity mapping $100\to357$, with a raw real-valued output and
+no output activation. Its first weight has shape $1024\times100$ and its output weight has
+shape $357\times1024$. A second head shares the trunk and emits per-program
+gate logits, so the shift is $S_g=c\cdot(\text{gate}\odot\text{raw})$ with a learned scalar
+penetrance $c$ and a sparse target gate that is Gumbel-sigmoid in
+training and hard at evaluation. The gate open
+probability is penalized by an $L_0$ target-sparsity term. A leakage-safe train-only
+retrieval memory over embedding keys can add an embedding-similarity-weighted shift with
+the query row self-masked, which we keep off by default in the reported model.
+
+\subsection{The masked gene-program (SENA) decoder}
+The decoder is linear, $x{=}Dz{+}b$ with $D\in\mathbb{R}^{4366\times357}$. Each latent
+column is tied to a Gene Ontology Biological Process (GO:BP) program by a membership mask
+$M\in\mathbb{R}^{4366\times357}$. We refer to this masked gene-program decoder scheme as
+SENA, following \citep{sena2025}. The effective decoder weight is the masked-learnable
+product $D\odot M$, so annotated gene-program pairs learn at full strength while
+off-annotation pairs are shrunk by a leak factor $\lambda$. This forces gene covariance to
+route through the program latents and $A$ rather than through arbitrary gene-gene edges.
+The mask is built from the Enrichr GO Biological Process 2023 library. Candidate terms are
+GO:BP sets with at most $30$ genes and at least $5$ genes present on our axis. Terms are
+greedily de-duplicated largest-first so no kept term overlaps a previously kept one by more
+than $0.5$ under the containment overlap
+$\lvert A\cap B\rvert/\min(\lvert A\rvert,\lvert B\rvert)$. Off-annotation entries take the
+leak value $\lambda{=}0.3$. The GO:BP selection yields $357$ kept programs on our axis, so
+the latent dimension is set to the number of kept programs and the deployed model has
+$d{=}357$ program latents. The decoder mask is not frozen, so $D$ is masked-learnable
+rather than fixed to the mask.
+
+\subsection{Training objective, prior-off}
+The total loss is
+\begin{equation}
+\begin{split}
+\mathcal{L}
+={}& \lambda_{\mathrm{rec}}\,\mathcal{L}_{\mathrm{rec}}
++ \beta_{\mathrm{eff}}\,\mathcal{L}_{\mathrm{KL}}
++ \lambda_{\mathrm{pert}}\,\mathcal{L}_{\mathrm{pert}}
++ \lambda_{\mathrm{spec}}\,\mathcal{L}_{\mathrm{spec}}\\
+&+ \lambda_{\mathrm{ortho}}\,\mathcal{L}_{\mathrm{ortho}}
++ \lambda_{\mathrm{sparse}}\,\mathcal{L}_{\mathrm{sparse}}
++ \lambda_{\mathrm{prior}}\,\mathcal{L}_{\mathrm{prior}} .
+\end{split}
+\label{eq:total_loss}
+\end{equation}
+We train prior-off. The graph prior, decoder-orthogonality, graph-sparsity, decoder-$L_1$,
+and acyclicity weights are all zero
+($\lambda_{\mathrm{prior}}{=}0$, $\lambda_{\mathrm{ortho}}{=}0$, $\lambda_{\mathrm{sparse}}{=}0$,
+$\lambda_{\mathrm{D\text{-}sparse}}{=}0$, and both acyclicity coefficients $0$),
+so no external transcription-factor--target database edge is ever used to shape $A$. The
+acyclicity term is skipped entirely when its weights are zero to avoid $0\times\text{NaN}$
+poisoning. The training log confirms the acyclicity residual stays at $0$ throughout.
+Table~\ref{tab:loss_terms} lists every active term with its exact form and weight for the
+deployed model.
+
+The reconstruction term is a plain mean squared error (MSE), modality-gene-masked so a
+cell only scores genes its modality observes. The Kullback--Leibler (KL) divergence is the
+standard diagonal-Gaussian variational term with a free-bits floor, and its weight $\beta$
+ramps linearly from $0.01$ to $0.5$ over the first $30$ epochs. The perturbation term
+$\mathcal{L}_{\mathrm{pert}}$ (weight $\lambda_{\mathrm{pert}}{=}10$, clamped at $50$ before
+scaling) is the sum of the sub-terms in Table~\ref{tab:loss_terms}, computed on cell
+sentences of $S{=}64$ cells so the mean-shift target is a per-sentence pseudobulk $\Delta$.
+The DE-gene MSE sub-term deliberately preserves magnitude and is not whitened, and is
+restricted to observed differentially expressed (DE) genes above the threshold $0.1$, which
+is the term that carries per-gene response magnitude.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Active training-loss terms for the deployed world model. All weights are exact
+configured values. Terms with weight $0$ are omitted (graph prior, decoder-orthogonality,
+graph-sparsity, decoder-$L_1$, acyclicity, energy optimal-transport, and shift-$L_1$).
+MMD denotes maximum mean discrepancy and InfoNCE the info-noise-contrastive estimation
+loss.}
+\label{tab:loss_terms}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Term & Form (drift $=$ mean train-single $\Delta$) & Weight & Value \\
+\midrule
+Reconstruction & $\lVert (\hat{x}-x)\odot m_{\mathrm{mod}}\rVert^2$ mean-MSE & $\lambda_{\mathrm{rec}}$ & $1.0$ \\
+KL & $-\tfrac12\overline{(1+\log\sigma^2-\mu^2-\sigma^2)}$, free-bits & $\beta$ & $0.01\!\to\!0.5$ \\
+Perturbation MSE & $\lVert \Delta_{\mathrm{pred}}-\Delta_{\mathrm{obs}}\rVert^2$ & $\lambda_{\mathrm{MSE}}$ & $1.0$ \\
+Distribution matching (MMD) & Gaussian-RBF MMD$^2$, median bandwidth, per sentence & $\lambda_{\mathrm{MMD}}$ & $1.0$ \\
+Goal specificity (InfoNCE) & symmetric NCE on drift-removed norm.\ $\Delta$, temp $0.2$ & $\lambda_{\mathrm{NCE}}$ & $1.0$ \\
+DE-gene MSE & unwhitened MSE on $\{|\Delta_{\mathrm{obs}}{-}\mathrm{drift}|{>}0.1\}$ genes & $\lambda_{\mathrm{DEG}}$ & $8.0$ \\
+Target sparsity ($L_0$) & $\overline{\sum_k \text{gate-prob}_k}$, ramped & $\lambda_{L_0}$ & $0.03$ \\
+Spectral & $\operatorname{relu}(\sigma_{\max}(A)-0.95)$ & $\lambda_{\mathrm{spec}}$ & $0.1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A gradient-reversal dataset classifier on the encoder mean $\mu$ drives latent
+modality-invariance and is added with an implicit coefficient of $1.0$ when there is more
+than one modality. The mutilation is run in shift mode with $\beta{=}1.0$. The mutilation
+clip of $0.5$ is inert in shift mode, where the clamp is to $1.0$.
+
+% =============================================================================
+\section{Datasets, splits, and checkpoint discipline}\label{app:data}
+\subsection{Sources}
+We use three single-cell resources. The Joung TF atlas is a human embryonic stem cell
+(hESC) single-TF overexpression atlas at day $7$ \citep{joung2023tfatlas}. It contributes
+single-TF perturbations plus a small number of arrayed combinations. The Briggs
+hESC$\to$fate overexpression screen is a dense combinatorial TF screen read out at days
+$14$ and $28$, deposited at GEO under accession GSE328457 \citep{briggs2026}. It
+contributes high-order TF combinations and pluripotent hESC-start controls. The Cao fetal
+cell atlas defines the target-fate marker signatures \citep{cao2020fetal}.
+
+\subsection{Gene axis and modality alignment}
+The shared gene axis is the Joung $4366$-gene vocabulary. Briggs cells are aligned onto it
+by matching counts-per-$10{,}000$ log-normalized values on shared genes and zero-filling
+the rest. About $2800$ of the $4366$ genes are observed in Briggs. A per-modality gene mask
+keeps the vocabulary at $4366$ but scores the reconstruction loss only on genes each
+modality observes. Joung sees all $4366$ genes, Briggs only its observed subset. Each
+Briggs cell carries an in-vocabulary TF set obtained by collapsing isoforms and keeping the
+modelable TFs. Cells are grouped by their in-vocabulary TF set. Sets of in-vocabulary size
+$2$ to $8$ with at least $5$ replicate cells become combination
+perturbations. The per-cell median in-vocabulary set size is about $5$ and reaches into the
+teens, so Briggs supplies the high-order regime.
+
+\subsection{Answer-key holdout and leakage-free splits}
+The answer key is held out of training so recovery is honest. A Briggs combination is held
+out if it shares at least two members with $P_1$ or $P_2$, is one of the six canonical hematopoietic stem and progenitor cell (HSPC)
+pairs, or is one of the arrayed-validated combinations from the supplementary table. The
+two validated cocktails are
+$P_1=\{\text{TAL1, RPA3, ZFP90, RNF138, LMO2, KLF2}\}$ and
+$P_2=\{\text{DDIT3, MZF1, HOXB3, MIER1, SIRT6, ZNF85}\}$. In the deployed
+model this holds $222$ answer-key combinations out of training while keeping them for
+evaluation. Single TFs are
+split with combo-involved TFs forced into training, so a single-TF holdout never silently
+guts combination coverage.
+Fate targets are split by fate name into folds to prevent cross-source leakage.
+
+\subsection{The two deployed checkpoints}
+Two checkpoints back the paper, both trained for $60$ epochs.
+
+\textbf{Deployed production world model.} Trained with both the single-TF and combination
+training fractions set to $1.0$, so every single TF and every non-answer-key combination is
+in training and only the $222$ answer-key combinations are held out. Like the held-out
+sibling, it warm-starts from a singles-only base model and oversamples single-TF sentences
+$8\times$ during the combination finetune, so single-TF effects are retained. The training
+log records $963{,}974$ cells, a per-epoch reconstruction subsample of $150{,}000$ cells,
+$495$ single-TF blocks and $1622$ combination blocks ($2117$ blocks total), and $22{,}328$
+cell sentences per epoch. This is the checkpoint used for all causal-structure validation
+(App.~\ref{app:model_full} numbers and Sec.~\ref{sec:causal}) and as the frozen reward
+oracle for the planner. Because its training fractions are $1.0$, a held-out-singles score
+on this checkpoint measures memorization and is not a genuine held-out number. Genuine
+held-out single and combination prediction uses the next checkpoint.
+
+\textbf{Held-out combination finetune.} Trained with a single-TF training fraction of
+$0.85$ and a combination training fraction of $0.8$ under a fixed split seed, warm-started
+from a singles-only base model, with recency-weighted replay of combinations during the
+finetune. This split yields $432$ train and $63$ held-out Joung singles, $36$ train and $8$
+held-out Joung combinations, and Briggs combinations split into train and held-out plus the
+$222$ answer-key combinations. Two additional seed variants provide the three seeds behind
+the main-text prediction $p$-values. The main-text held-out advantages of $+0.184$
+(answer-key combinations) and $+0.225$ (held-out combinations) in drift-removed
+\PearsonDEG are computed on this checkpoint across the three seeds. The epistasis
+panels (Fig.~\ref{fig:epi}A--D) also use this held-out sibling for the combination-trained
+model and its singles-only base for the singles-only arm, so the interaction claims are
+evaluated on the same recipe as the planner world model. Only the enrichment panel
+(Fig.~\ref{fig:epi}E) uses the deployed production world model.
+
+\subsection{Fate-target annotation}\label{app:fate}
+Target fates are defined by a marker-signature pipeline over the Cao fetal cell atlas. We
+start from the Cao cell-type mean log-expression profiles, restrict to genes on our shared
+axis, and center them. Cell types are merged into fate groups by average-linkage
+hierarchical clustering at cosine similarity $0.78$ on the centered profiles, and each fate
+group is named by its dominant tissue--type suffix. For each fate group we take the top
+$50$ genes by one-vs-rest over-expression as its marker set and form a normalized marker
+signature.
+
+Every candidate perturbation (Briggs combinations, Joung single-TF overexpressions, and
+Joung arrayed combinations) is summarized by its drift-removed mean response, the residual
+centroid $\Delta$ obtained by subtracting the source-level mean $\Delta$. Each perturbation's
+residual $\Delta$ is scored against all marker signatures and assigned to its argmax fate. A
+fate is \emph{kept} only if it is \emph{target-separable}, meaning its marker signature is
+isolated from every other signature (max cosine similarity below $0.75$), and
+\emph{reachable}, meaning it collects at least a minimum number of marker-argmax member
+cells ($5$ for Briggs, $3$ for Joung). Each kept fate's target is the drift-removed mean
+$\Delta$ (residual centroid) of its marker-argmax member cells. Kept fates are then tiered.
+Tier~A fates additionally have a positive per-fate cosine silhouette in the marker-gene
+(specific-gene) subspace, and Tier~B fates have a non-positive silhouette. Crucially, the
+annotation does \emph{not} gate on silhouette. Both tiers are retained, and the silhouette
+only labels the clean-answer-key core (Tier~A) versus the remainder (Tier~B). Reachable-fate
+confidence uses a proper Benjamini--Hochberg correction, which moves the fate set by only one
+or two Briggs fates relative to a raw permutation cutoff.
+
+Each fate additionally stores its Cao marker genes, its member count, its driver TFs, and its
+answer-key combinations. The driver and answer-key lists derive from the Briggs $P_1$/$P_2$
+canonical cocktails and the arrayed-combo table (Sec.~\ref{app:data}). The pipeline yields
+$84$ fates, namely $65$ Briggs, $16$ Joung single-TF, and $3$ Joung combination fates
+(Table~\ref{tab:fates}). The zero-shot HSPC fate,
+the Briggs liver hematopoietic-stem-cell fate (Tier~B), is forced to fold $-1$ and is always
+held out. Its evaluation uses the dedicated Briggs $P_1\cup P_2$ answer key rather than Cao
+markers.
+
+Fates are split into a five-fold leave-fates-out cross-validation partition by \emph{fate
+name}, so all sources of one fate name share a fold and there is no cross-source leakage. The
+folds are stratified by name-level tier and assigned round-robin by descending member count,
+so each Tier~A fate is held out exactly once. In each cross-validation fold $f\in\{0,\dots,4\}$
+the fates assigned to fold $f$ are held out for evaluation and the rest are used for
+training, and the single fate at fold $-1$ (HSPC) is held out in every fold. The per-fold
+held-out counts are $19$, $18$, $14$, $16$, $16$ for folds $0$--$4$ plus the $1$ always-held-out
+HSPC fate at fold $-1$.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Fate-target counts by source and tier. Tier~A fates additionally clear a positive
+marker-subspace silhouette (clean answer-key core). Tier~B fates are target-separable and
+reachable but silhouette-negative. The HSPC fate (the Briggs liver hematopoietic-stem-cell
+fate) is one of the $65$ Briggs fates, is Tier~B, and is forced to fold $-1$ (always held
+out).}
+\label{tab:fates}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Source & Fates & Tier A & Tier B \\
+\midrule
+Briggs (combinations)      & $65$ & $10$ & $55$ \\
+Joung single-TF            & $16$ & $2$  & $14$ \\
+Joung combination          & $3$  & $2$  & $1$  \\
+\midrule
+Total                      & $84$ & $14$ & $70$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =============================================================================
+\section{Training and planner hyperparameters}\label{app:hparams}
+\subsection{World-model hyperparameters}
+Table~\ref{tab:wm_hparams} lists the exact world-model settings for the deployed model.
+Training runs in three phases inside the $60$ epochs, recorded in the training log. Phase A
+is epochs $1$ to $10$, reconstruction only with the directed graph frozen. Phase B is epochs
+$11$ to $50$, directed-graph learning active with the full loss. Phase C is epochs $51$ to
+$60$, full loss with temperature annealing. The world model trains on CPU high-memory nodes
+with about $340$ GB of RAM.
+
+The architecture is the model of App.~\ref{app:model_full}: a per-cell encoder, a latent
+SEM over $d{=}357$ GO:BP program latents solved in closed form, an ESM2 per-TF shift encoder
+($100$-dim descriptor $\to$ $1024$ hidden $\to$ $357$), the shift-mutilate do-operator for
+$k$-TF composition, and the masked-GO (SENA) linear decoder to the $4366$-gene axis. These
+same settings train both deployed checkpoints described in Sec.~\ref{app:data} (``The two
+deployed checkpoints''). The deployed production world model is the epoch-$60$ checkpoint,
+used for all causal-structure validation and as the frozen planner reward oracle. The
+held-out combination finetune shares every model hyperparameter in
+Table~\ref{tab:wm_hparams} and differs only in its train fractions (single-TF fraction
+$0.85$, combination fraction $0.8$) and its singles-only-base warm-start. It backs the
+held-out prediction and epistasis panels. Both checkpoints warm-start from a singles-only
+base and oversample single-TF sentences $8\times$ during the combination finetune.
+
+\begin{table}[h]\centering\footnotesize
+\caption{World-model hyperparameters for the deployed model. Values not present in the
+configuration are marked not specified.}
+\label{tab:wm_hparams}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Optimizer & Adam & Gene axis $G$ & $4366$ \\
+Learning rate & $10^{-3}$ & Latent programs $d$ & $357$ (GO:BP mask) \\
+LR warmup epochs & $5$ & Decoder & masked-GO (SENA), $\lambda{=}0.3$ \\
+Epochs & $60$ & Shift descriptor & ESM2, $100$-dim \\
+Batch size & $256$ & Shift MLP & $100\!\to\!1024\!\to\!357$, LeakyReLU$(0.2)$ \\
+Grad accumulation & $4$ & Interaction rank & $32$ \\
+KL $\beta$ & $0.01\!\to\!0.5$ over $30$ ep & Graph samples (train/eval) & $1$ / $32$ \\
+$\lambda_{\mathrm{pert}}$ & $10$ & Mutilation $u_{\max}$, $\beta$ & $0.5$, $1.0$ \\
+DEG-MSE weight, thr & $8.0$, $0.1$ & Spectral weight & $0.1$ \\
+Contrastive temp & $0.2$ & Prior / sparse / ortho / acyclicity & $0$ (prior-off) \\
+Cell-sentence $S$ & $64$ & Sentences per block & $4$ \\
+Sentence batch & $32$ & Single-sentence mult & $8$ \\
+Recon subsample & $150{,}000$/epoch & $\tau$ anneal & $1.0\!\to\!0.25$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The GFlowNet planner}
+The deployed planner is a trajectory-balance generative flow network (GFlowNet) over the frozen world model. A cocktail
+is built one TF at a time by an autoregressive forward policy. Because the construction is
+autoregressive there is a single parent per state, so the backward policy is trivially
+$P_B\equiv1$ and the trajectory-balance loss for a terminal cocktail $x$ under goal $g$ is
+\begin{equation}
+\mathcal{L}_{\mathrm{TB}}
+=\Big(\log Z(g) + \textstyle\sum_t \log P_F(a_t\mid s_t,g) - \beta\cdot\Phi(x,g)\Big)^2 ,
+\label{eq:tb}
+\end{equation}
+with reward $R(x)=\exp(\beta\,\Phi(x,g))$ \citep{bengio2021gflownet} and reward exponent
+$\beta{=}48$. The deployed flagship uses a \emph{goal-conditioned} partition function
+$\log Z(g)$, where a per-goal head absorbs the goal-dependent normalizer so the forward policy is
+free to spread mass across the many high-reward cocktails for each goal. This is the single
+most important lever for diversity. The alternative of a single shared scalar $\log Z$ for
+all goals forces the forward policy to carry the goal-dependent normalizer, and it collapses
+to an amortized argmax at convergence (effective number of distinct sampled sets
+$\mathrm{ess}_q\approx1$--$2$, versus up to the target ceiling of $\approx46$ under the
+conditional head). We report the shared-$\log Z$ variant as an ablation.
+
+\paragraph{Ensemble-pessimistic reward.} The potential $\Phi(x,g)$ is the drift-removed match
+of the world-model-predicted state to the target fate. To guard against exploiting any single
+world model's errors, the reward is \emph{ensemble-pessimistic}. We evaluate the same cocktail
+under $K{=}6$ independently trained world models and combine their potentials as
+\begin{equation}
+\Phi_{\mathrm{pess}}(x,g)=\operatorname*{mean}_{k=1}^{K}\Phi^{(k)}(x,g)\;-\;\lambda\cdot\operatorname*{std}_{k=1}^{K}\Phi^{(k)}(x,g),
+\qquad \lambda=0.25 ,
+\label{eq:pess}
+\end{equation}
+so cocktails on which the ensemble disagrees are penalized. The pessimism weight $\lambda$
+trades recovery against sampling diversity. The deployed value is $\lambda{=}0.25$.
+
+Off-policy replay mixes a fraction $\gamma{=}0.5$ of each batch from a recency-weighted buffer
+of past cocktails (capacity $5000$), which is valid for trajectory balance. The reward oracle
+is the frozen world-model ensemble, so no surrogate or acquisition proxy is needed. Batches
+are $16$ trajectories per update, trained for $10^{6}$ iterations. The per-source action
+budget is set at reset, so Joung caps at $k{\le}2$ and Briggs at $k{\le}8$. Prioritized,
+reward-weighted replay is a reported negative (App.~\ref{app:rl}). The deployed setting is
+plain recency-weighted replay.
+
+The policy is a set-based autoregressive policy over the vocabulary
+$\{\text{STOP}\}\cup\text{candidates}$. A shared encoder feeds all slots, so cost grows
+linearly in $k$ not combinatorially. STOP is forbidden at slot $0$ and already-chosen genes
+are masked at later slots. The action head is a plain multilayer perceptron (MLP)
+over the per-slot features.
+
+\subsection{Design selection}
+The deployed flagship, the goal-conditioned GFlowNet with the plain MLP head and
+$\lambda{=}0.25$, was selected by a sweep over the partition function (shared versus
+goal-conditioned $\log Z$) and the ensemble-pessimism weight
+$\lambda\in\{0.1,0.25,0.5,0.75,1.0\}$, at $10^6$ iterations across five folds and three seeds
+on the frozen production world model with a curated candidate pool and per-source $k$ caps.
+The goal-conditioned $\log Z$ is what enables diverse sampling and $\lambda{=}0.25$ gives the
+best recovery--diversity trade-off (App.~\ref{app:rl}). The InfoNCE fate-specificity term uses
+scale $\beta_{\mathrm{contrast}}{=}0.3$; a no-contrast control that drops it is reported in
+App.~\ref{app:rl}.
+
+% =============================================================================
+\section{Evaluation metrics}\label{app:metrics}
+This section defines every metric precisely. For a planner the per-fate output is a
+frequency dictionary of proposed TFs over the best-of-$N$ samples. Picks are ranked by
+descending selection frequency.
+
+\textbf{Driver recall at $k$.} With driver set (answer key) $\mathcal{D}$ and the top-$k$
+ranked picks $\mathcal{T}_k$, $\mathrm{drv\_recall}@k = \lvert\mathcal{T}_k\cap\mathcal{D}\rvert/\lvert\mathcal{D}\rvert$.
+The denominator is the answer-key size, so this is recall not precision. We report
+$k\in\{5,10,20\}$.
+
+\textbf{Precision at $k$.} $\mathrm{prec}@k = \lvert\mathcal{T}_k\cap\mathcal{D}\rvert/\min(k,\lvert\mathcal{T}_k\rvert)$.
+We report $k\in\{5,10\}$.
+
+\textbf{Cross-fate discrimination, own minus other.} For a scorer $s$, discrimination is the
+score of a fate's picks against its own answer key minus the mean score of the same picks
+against every other held-out fate's answer key, $\mathrm{disc}=s(\text{own})-\overline{s(\text{other})}$.
+We report $\mathrm{disc\_dr20}$ using recall@$20$ and
+$\mathrm{disc\_soft1}$ using SOFT-1. The oracle plays the true drivers as picks. For
+$\mathrm{disc\_dr20}$ the oracle equals $1-\overline{\text{cross-fate driver-set overlap}}$,
+so a high oracle means the answer-key driver sets are nearly disjoint across
+fates and a perfect selector separates them, while a low oracle means fates share drivers
+and cap what any planner can achieve. A random planner sits near zero because its picks hit
+own and other drivers equally.
+
+\textbf{SOFT-1 and SOFT-2.} These score in a functional space built from drift-removed,
+unit-normed single-TF $\Delta$ vectors with $k$-means module labels. SOFT-1 is the
+frequency-weighted mean, over picks, of
+the maximum cosine of a pick's single-TF $\Delta$ to any driver's single-TF $\Delta$. SOFT-2
+is the frequency-weighted fraction of picks whose $k$-means module coincides with any driver's
+module. The variants m12, m24, m48 use $12$, $24$, or $48$ modules. These metrics saturate.
+The nearest-cosine over a broad answer set in a low-dimensional unit-normed space means even
+random TFs land close to some driver and share one of only twelve modules, so a matched-random
+null already scores about $0.28$ to $0.36$ and the policy barely separates. For this reason
+SOFT-1 and SOFT-2 are reported in the appendix with their null values shown, and the
+headline uses driver recall, precision, and the own-minus-other discrimination forms.
+
+\textbf{Best residual match.} For each sampled cocktail the world model applies the
+do-operator, decodes, subtracts the control reconstruction and the drift, and matches the
+drift-removed predicted $\Delta$ against the target on the active dimensions. The best
+residual match is the maximum match over the best-of-$N$ sampled cocktails.
+
+\textbf{The matched-random null.} For each held-out fate the null records the policy's
+per-sample cocktail sizes, then draws for each sample a random cocktail of the same size
+from the candidate pool and recomputes every metric. The reported null value is the mean
+over $R$ permutations ($R{=}500$ for the reported runs). When a policy is gated to a
+per-goal shortlist, the reported evaluation draws the null from the full $280$-candidate
+pool, which gives a pipeline-versus-ungated contrast consistent across all sources.
+
+\textbf{The $1000$-shuffle-$A$ permutation test.} For the causal-structure claim we ablate
+$A$ inside the frozen do-operator. The variants are original, reversed ($A^{\top}$),
+symmetrized ($\tfrac12(A+A^{\top})$), and shuffled (a permutation of the off-diagonal
+entries, which preserves the value multiset and edge count). Every non-original variant is
+rescaled to
+match $\lVert A\rVert_2$, so magnitude is not a confound. The null draws $N{=}1000$ shuffled
+$A$ matrices, each with a fresh seed, and stores the mean drift-removed \PearsonDEG
+across perturbations. The single-TF prediction metric is the per-perturbation Pearson of the
+drift-removed predicted residual against the drift-removed observed residual on the set of
+DE genes above the threshold $0.05$, with the perturbed TF itself excluded so the metric
+measures downstream recovery. The permutation $p$-value is the add-one estimate
+$(1+\#\{\text{null}\ge\text{original}\})/(N+1)$, which gives $1/1001\approx9.99\times10^{-4}$
+when no shuffle exceeds the original.
+
+\textbf{Paired Wilcoxon across fates and Benjamini--Hochberg.} The primary planner
+significance test is a one-sided paired Wilcoxon signed-rank of the policy against its
+matched-random null across held-out fates. The replicate is the fate when at least two
+held-out fates exist, with per-fate values
+averaged over seeds. For a single-fate source such as HSPC the test falls back to pairing
+across the fold-by-seed training replicates, which gives up to $15$ paired points for five
+folds and three seeds. Benjamini--Hochberg correction is applied across the whole
+source-by-metric grid. The same one-sided paired Wilcoxon signed-rank test (dropping zero
+differences) is used for the $66$-TF and $14$-combination causal-structure tests.
+
+\textbf{Standard error of the mean (with one delta-degree-of-freedom).} Standard errors of the
+mean, abbreviated s.e.m. in the tables and distinct from the structural equation model above,
+use the per-seed means as the replicate axis. Within each seed, per-fate values are pooled
+across folds and averaged, and the standard error of the mean is the sample standard
+deviation of those per-seed means with one delta-degree-of-freedom
+divided by $\sqrt{n_{\mathrm{seeds}}}$. A single replicate is reported as undefined rather
+than zero.
+
+\textbf{Baselines.} MPC-exact is a model-predictive control (MPC) world-model beam search (beam width $8$) that
+forward-selects the cocktail maximizing the predicted drift-removed match. Additive-greedy
+is a forward selection that sums observed drift-removed single-TF $\Delta$ vectors with no
+world-model interaction. Random-shortlist is a single
+random pick from the goal shortlist. Every baseline is restricted to the same per-goal
+shortlist as the policy, so the comparison isolates selection within the pool.
+
+% =============================================================================
+\section{Full cross-arm planner evaluation}\label{app:rl}
+The deployed planner is the goal-conditioned GFlowNet with the plain MLP head and the
+ensemble-pessimistic reward at $\lambda{=}0.25$ (Eq.~\eqref{eq:pess}), trained over three
+folds and five seeds. We evaluate it on two axes against non-learned baselines, asking (1) whether it
+\emph{recovers} the true driver TFs of a held-out fate, and (2) whether it \emph{samples
+diverse, reward-proportional} cocktails, with a zero-shot HSPC case study. The genuine wins
+are that the planner is amortized and cheap, is diverse-at-quality, and on the zero-shot HSPC fate
+covers more of the arrayed answer key with biologically coherent regulators than search does. On
+per-driver recovery it reaches \emph{parity} with model-predictive beam search, not a win.
+
+\paragraph{Why a GFlowNet trainer.} Against a one-step set-PPO trainer, the GFlowNet samples
+many distinct high-quality cocktails while set-PPO collapses toward a single mode, which is
+why the deployed planner is a GFlowNet rather than a policy-gradient trainer.
+
+\subsection{Axis 1, driver recovery}
+On the finalized flagship we report held-out Briggs recovery under three readouts of the
+$256$ sampled cocktails, each against its \emph{matched} null (Table~\ref{tab:flagship_rec}).
+The \emph{raw} readout ranks TFs by sampling frequency and is compared to a matched-breadth
+permutation null ($\approx0.072$) that draws random size-matched cocktails and ranks them the
+same way. The \emph{elite-$10$} readout keeps the top $10\%$ of the $256$ by reward and ranks
+within that set, and the \emph{leave-one-out} (LOO) readout ranks each TF by its marginal
+reward contribution. Both are compared to the \emph{random-plus-elite} null ($\approx0.42$),
+which passes random cocktails through the same reward filter and so measures what the reward
+filter alone buys. Using the weak permutation null on an elite readout would over-credit the
+policy for the filter's work, so each readout is matched to its own null. Model-predictive
+beam search is likewise a reward-guided selector, so the fair comparison between the policy
+and beam search uses the common random-plus-elite null.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Deployed flagship (goal-conditioned GFlowNet, MLP head, ensemble pessimism
+$\lambda{=}0.25$), held-out Briggs driver recall at $20$, three folds $\times$ five seeds.
+Each readout is scored against its matched null. Here $\Delta$ is the policy minus that null.
+World-model (WM) evaluations per fate index inference cost. The random-plus-elite null is the
+common reward-guided baseline used to compare the policy against beam search.}
+\label{tab:flagship_rec}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+Planner / readout & null & abs r@$20$ & $\Delta$ vs null & WM evals/fate \\
+\midrule
+policy, raw            & permutation ($0.072$)   & $0.455$ & $+0.382$ & $256$ \\
+policy, elite-$10$     & random$+$elite ($0.38$) & $0.582$ & $+0.200$ & $256$ \\
+policy, LOO            & random$+$elite ($0.42$) & $0.712$ & $+0.291$ & $207$ \\
+MPC-exact (beam $8$)   & random$+$elite ($0.39$) & $0.507$ & $+0.120$ & $9240$ \\
+additive               & permutation ($0.072$)   & $0.012$ & $-0.060$ & --- \\
+random                 & ---                     & $0.071$ & ---      & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The policy adds genuine driver signal above the reward filter. On the elite readout it
+reaches $0.582$, a $+0.20$ gain over the random-plus-elite null (paired Wilcoxon
+$p{=}1.7\times10^{-5}$, $n{=}41$ held-out fates), and on the LOO readout it reaches $0.712$
+($+0.29$ above the same null). Beam search reaches $0.507$ ($+0.12$ above the filter,
+$p{=}0.02$), so the policy \emph{matches} beam search on absolute recovery. The direct paired
+comparison of the policy against beam search is non-significant (parity), consistent with the
+matched, paired analysis. The advantage is compute. The policy uses $\approx256$ world-model
+evaluations per fate (the LOO readout $\approx207$), while beam search uses $\approx9240$, so
+the policy attains the same recovery at roughly $36$--$45\times$ lower inference cost. Both
+learned and search methods sit far above the additive ($0.012$) and random ($0.071$)
+baselines, which have no world model.
+
+Table~\ref{tab:elite_permetric} extends the comparison across four metrics on the same elite readout and the same
+$41$ held-out fates. Beam search (a reward-guided selector read out on its own proposals) and the policy are at
+parity on the broad metrics, recall@$20$ and soft-recall@$20$ (paired Wilcoxon $p{=}0.10$ and $0.20$, not
+significant), while the policy is significantly ahead at the top of the ranking, recall@$5$ and precision@$5$
+(both $p<0.05$); every metric is far above the additive and random baselines ($p<10^{-4}$). Soft-recall credits
+functional near-misses through the drift-removed single-TF program space and is scored identically for every
+method.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Per-metric budget-matched comparison on the elite (top-$10\%$-by-reward) readout, $n{=}41$ held-out
+Briggs fates. Baselines are read out on their own reward-selected proposals and restricted to the identical
+per-fate shortlist; $p$ is a paired per-fate Wilcoxon of the policy against each baseline.}
+\label{tab:elite_permetric}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+metric & policy & MPC (beam) & additive & random \\
+\midrule
+recall@$5$        & $0.357$ & $0.235$ ($p{=}0.02$)        & $0.000$ ($p{<}10^{-4}$) & $0.049$ ($p{<}10^{-4}$) \\
+recall@$20$       & $0.578$ & $0.507$ (ns, $p{=}0.10$)    & $0.012$ ($p{<}10^{-4}$) & $0.071$ ($p{<}10^{-4}$) \\
+soft-recall@$20$  & $0.799$ & $0.716$ (ns, $p{=}0.20$)    & $0.089$ ($p{<}10^{-4}$) & $0.540$ ($p{=}2{\times}10^{-4}$) \\
+precision@$5$     & $0.198$ & $0.130$ ($p{=}0.01$)        & $0.000$ ($p{<}10^{-4}$) & $0.020$ ($p{<}10^{-4}$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Held-out fate breakdown}\label{app:fatebreakdown}
+The Briggs fate universe is $65$ cell-type fates partitioned by a leakage-clean by-name five-fold split (folds
+$0$--$4$, $\approx13$ fates each) with a difficulty tier (A $=$ positive-silhouette separable target, B $=$
+separable and reachable). The flagship holds out folds $0$, $1$, and $2$, giving the $n{=}41$ held-out fates in
+Table~\ref{tab:fatelist}. Fold $0$ was evaluated at a single seed and folds $1$--$2$ at five seeds, so fold-$0$
+per-fate values are noisier. The table lists each fate's fold, tier, driver count, and elite recall@$20$ for the
+policy (pol) and beam search (MPC), showing the per-fate spread behind the paired test: the policy wins on many
+fates, ties on some, and loses on others, which is why the aggregate is a statistical tie with beam search.
+
+\begin{table}[h]\centering\scriptsize
+\caption{Per-fate elite recall@$20$ on the $n{=}41$ held-out Briggs fates (folds $0$--$2$).}
+\label{tab:fatelist}
+\begin{minipage}[t]{0.49\linewidth}\centering
+\begin{tabular}{@{}llp{2.6cm}ccc@{}}
+\toprule
+fold & tier & fate & drv & pol & MPC \\
+\midrule
+-1 & B & Liver-Hematopoietic stem cells & 4 & 0.25 & 0.50 \\
+0 & B & Heart-Epicardial fat cells & 3 & 1.00 & 1.00 \\
+0 & A & Spleen-Mesothelial cells & 3 & 1.00 & 1.00 \\
+0 & B & Kidney-Ureteric bud cells & 4 & 0.75 & 0.75 \\
+0 & B & Cerebellum-Granule neurons & 3 & 0.67 & 0.67 \\
+0 & B & Ciliated epithelial cells & 3 & 0.67 & 0.67 \\
+0 & A & Eye-PDE11A\_FAM19A2 positive cells & 3 & 0.67 & 0.33 \\
+0 & A & Placenta-Trophoblast giant cells & 3 & 0.67 & 0.67 \\
+0 & B & Skeletal muscle cells & 3 & 0.67 & 0.67 \\
+0 & B & Adrenal-Sympathoblasts & 5 & 0.60 & 0.20 \\
+0 & B & Placenta-Syncytiotrophoblasts and villous cytotrophoblasts & 2 & 0.50 & 0.00 \\
+0 & B & Placenta-Vascular endothelial cells & 3 & 0.33 & 1.00 \\
+0 & B & Vascular endothelial cells & 3 & 0.33 & 0.67 \\
+0 & B & Eye-Retinal progenitors and Muller glia & 4 & 0.25 & 0.25 \\
+0 & B & Intestine-Stromal cells & 2 & 0.00 & 0.00 \\
+1 & B & Pancreas-CCL19\_CCL21 positive cells & 3 & 1.00 & 0.67 \\
+1 & B & Placenta-Stromal cells & 2 & 1.00 & 0.50 \\
+1 & A & Stomach-Squamous epithelial cells & 3 & 0.93 & 0.67 \\
+1 & B & Purkinje neurons & 2 & 0.80 & 0.50 \\
+1 & B & Stomach-Parietal and chief cells & 2 & 0.80 & 0.00 \\
+1 & B & Schwann cells & 3 & 0.73 & 1.00 \\
+\bottomrule
+\end{tabular}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.49\linewidth}\centering
+\begin{tabular}{@{}llp{2.6cm}ccc@{}}
+\toprule
+fold & tier & fate & drv & pol & MPC \\
+\midrule
+1 & B & Intestine-Smooth muscle cells & 4 & 0.70 & 0.50 \\
+1 & B & Eye-Bipolar cells & 3 & 0.67 & 0.87 \\
+1 & B & Kidney-Mesangial cells & 3 & 0.60 & 0.00 \\
+1 & B & Pancreas-Ductal cells & 3 & 0.60 & 0.00 \\
+1 & B & AFP\_ALB positive cells & 3 & 0.53 & 0.33 \\
+1 & B & Adrenal-Chromaffin cells & 3 & 0.33 & 0.33 \\
+1 & B & Eye-Amacrine cells & 2 & 0.30 & 0.00 \\
+2 & A & Heart-Visceral neurons & 1 & 1.00 & 1.00 \\
+2 & B & Placenta-IGFBP1\_DKK1 positive cells & 4 & 0.90 & 1.00 \\
+2 & B & Lung-Bronchiolar and alveolar epithelial cells & 3 & 0.80 & 0.33 \\
+2 & B & Intestine-Intestinal epithelial cells & 2 & 0.50 & 0.50 \\
+2 & A & Lung-Vascular endothelial cells & 2 & 0.50 & 0.70 \\
+2 & B & Stomach-Goblet cells & 2 & 0.50 & 0.50 \\
+2 & B & Pancreas-Islet endocrine cells & 3 & 0.47 & 0.33 \\
+2 & B & Eye-Astrocytes & 2 & 0.40 & 0.50 \\
+2 & B & Liver-Vascular endothelial cells & 2 & 0.40 & 0.50 \\
+2 & A & Chromaffin cells & 4 & 0.35 & 0.75 \\
+2 & B & Spleen-Vascular endothelial cells & 3 & 0.33 & 0.67 \\
+2 & B & Cerebellum-Inhibitory interneurons & 4 & 0.20 & 0.25 \\
+2 & B & Adrenal-Vascular endothelial cells & 1 & 0.00 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\end{table}
+
+\subsection{Axis 2, diversity at quality}
+The second axis asks whether the planner returns \emph{many} high-reward cocktails rather than
+one. On the enumerable HSPC candidate pool we draw $256$ proposals from each method and count
+how many are distinct and above a fixed quality bar (Table~\ref{tab:diversity}). Asked to
+return $256$ candidates, budget-matched beam search collapses to a single distinct high-quality
+cocktail. Size-matched random sampling gives $64$ distinct sets but of low reward. The policy
+returns $154$ distinct high-quality cocktails. The policy is the only method that is both
+diverse and high-quality. This diversity is owned by the goal-conditioned $\log Z$. It lets
+the effective number of distinct sampled sets approach the target ceiling ($\mathrm{ess}_q$ up
+to $\approx46$), whereas the shared-$\log Z$ variant collapses to an amortized argmax
+($\mathrm{ess}_q\approx1$--$2$).
+
+\begin{table}[h]\centering\footnotesize
+\caption{Diversity at quality on the enumerable HSPC pool, $256$ proposals per method.
+Distinct high-quality count is the number of distinct cocktails above a fixed reward bar.
+Beam search is asked for $256$ candidates and returns its frontier. It is not a sampler.}
+\label{tab:diversity}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Method & distinct high-quality cocktails & quality \\
+\midrule
+policy (flagship)      & $154$ & high \\
+beam-top-$256$         & $1$   & high \\
+random (size-matched)  & $64$  & low  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Zero-shot HSPC, coverage advantage and honest limits}
+We test the frozen policy zero-shot on a held-out hESC-to-HSPC fate. This is a single fate, so we
+report it as a case study over the $11$ fold$\times$seed runs with no per-fate significance test.
+
+\textbf{Diversity-coverage advantage on the arrayed key.} Against the Briggs arrayed answer key
+($54$ driver TFs across $28$ arrayed-validated combinations from the supplementary screen),
+the policy's diverse elite proposals cover far more of the key than the search or heuristic
+baselines, an elite recall@$50$ of $0.131$ against $\le0.056$ for MPC and additive and $0.044$ for
+random, and $15$ of the $54$ drivers surfaced across the runs against $3$--$4$ for every baseline
+(Table~\ref{tab:hspc}). The surfaced TFs are biologically coherent: the policy proposes the
+canonical hematopoietic regulators LYL1, KLF1, KLF2, and IKZF1 in $8$--$11$ of the $11$ runs, and
+members of the blood stem-cell heptad (TAL1/SCL, GATA2, RUNX1, FLI1) and the self-renewal factor
+HOXB4 in $1$--$3$ runs, all with the regulatory prior switched off.
+
+\textbf{Honest limits.} The advantage is coverage from diverse best-of-$N$ sampling, not per-driver
+precision. On the narrow twelve-TF $P_1{\cup}P_2$ named key, per-run elite recall@$20$ is $0.12$ for
+the policy against $0.27$ for MPC and $0.15$ for its random-plus-elite null, so the policy does not
+beat search or its own reward-filtered null on that key. We do not calibrate a breadth-matched null
+for the arrayed key, so the arrayed advantage is established against the search baselines but not
+against equal-breadth random sampling. We therefore treat HSPC as a diversity-coverage result on the
+broad key, not a beyond-chance per-driver recovery, and note that the reward filter, rather than the
+policy alone, contributes to surfacing canonical TFs. Zero-shot transfer to a new fate is a
+data-coverage limit, addressable with in-domain fate data.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Zero-shot HSPC coverage of the $54$-TF Briggs arrayed answer key, elite readout, over $11$
+fold$\times$seed runs (single fate, no p-value). Baselines are read out on their own reward-selected
+proposals. ``surfaced'' is the number of distinct arrayed driver TFs appearing across the runs.}
+\label{tab:hspc}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Method & recall@$50$ & distinct drivers surfaced (of $54$) \\
+\midrule
+policy (flagship)        & $0.131$ & $15$ \\
+MPC / greedy             & $0.056$ & $3$ \\
+additive                 & $0.056$ & $3$ \\
+random shortlist         & $0.044$ & $4$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Honest negatives}
+Two engineering attempts did not help and we report them. Prioritized, reward-weighted replay
+hurt relative to plain recency-weighted replay, so the deployed GFlowNet uses plain
+recency-weighted replay. Bulk-signal removal did not lift the cross-fate discrimination wall.
+The policy's own-minus-other discrimination sits near zero while a drivers-as-picks oracle
+reaches about $0.65$ on Briggs, and the wall persists across reward shaping, exploration
+budget, and bulk removal, so we report it as a limit of designing against signature-defined
+fates rather than a bug. The SOFT functional-space metrics are saturated as described in
+App.~\ref{app:metrics}. On Briggs the policy SOFT-1 is about $0.28$ against a null of about
+$0.28$, essentially no separation, which is why SOFT is not a headline.
+
+\subsection{Prediction leakage ladder}
+The world-model prediction advantage over the fair additive baseline survives progressively
+harder holdouts. We retrained the held-out finetune under two extra rungs, leave-TF-out
+(rung 2) and leave-program-out (rung 3, leave-$P_1$-out), and re-measured
+drift-removed \PearsonDEG. Table~\ref{tab:ladder} shows that on held-out Briggs
+combinations the world model with its interaction head beats both the observed-additive and
+the model-additive baselines at every rung, and the margin holds at high order $k6$--$8$.
+The honest counterpoint is the answer-key row. The $222$ high-order answer-key combinations
+are extrapolations the world model does not predict better than observed-additive
+($0.133$ versus $0.208$ at rung2), consistent with the main-text limitation that
+composition is effectively additive for held-out HSPC TFs that never appear in the training
+combinations.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Prediction leakage ladder, drift-removed \PearsonDEG, world model with head
+versus observed-additive and model-additive baselines. Rung labels are the
+progressively harder retrain holdouts. Values are group means with $n$ combinations.}
+\label{tab:ladder}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+Rung / group & $n$ & WM$+$head & WM no-head & obs-additive & model-additive \\
+\midrule
+\multicolumn{6}{@{}l}{\textbf{Rung2, leave-TF-out retrain}}\\
+Briggs combos train (in-dist)   & $387$ & $0.623$ & $0.385$ & $0.206$ & $0.294$ \\
+Briggs combos held-out (set-out)& $97$  & $0.464$ & $0.358$ & $0.245$ & $0.280$ \\
+Briggs held-out $k6$--$8$       & $6$   & $0.478$ & $0.087$ & $0.096$ & $0.064$ \\
+Joung combos held-out           & $8$   & $0.957$ & $0.397$ & $0.134$ & $0.100$ \\
+Briggs answer-key (extrapol.)   & $222$ & $0.133$ & $0.119$ & $0.208$ & $0.111$ \\
+\multicolumn{6}{@{}l}{\textbf{Rung3, leave-program-out retrain}}\\
+Briggs combos train (in-dist)   & $602$ & $0.591$ & $0.381$ & $0.197$ & $0.259$ \\
+Briggs combos held-out          & $151$ & $0.459$ & $0.335$ & $0.224$ & $0.231$ \\
+Briggs held-out $k6$--$8$       & $26$  & $0.418$ & $0.115$ & $0.122$ & $0.054$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =============================================================================
+\section{Additional world-model results}\label{app:wm}
+\subsection{Reconstruction, discrimination, and per-DEG behavior}
+The deployed production model reaches a stable reconstruction MSE of about $0.52$ and a KL
+of about $0.26$ at epoch $60$ with the acyclicity residual at zero throughout (training
+log). Drift-removed discrimination on Joung singles is near ceiling in the finetune
+checkpoint, with held-out singles reaching AUROC $0.917$ at rung2 and $0.952$ at rung3 while
+the observed-additive control is $1.0$ by construction. The world model's advantage grows
+with combination order. On held-out Briggs combinations the model-with-head \PearsonDEG
+stays high at $k6$--$8$ ($0.478$ at rung2) while both additive baselines collapse
+toward $0.06$ to $0.12$ (Table~\ref{tab:ladder}), which is the signature of genuine
+non-additive structure at high order.
+
+\subsection{The directed causal graph is load-bearing for prediction}\label{app:causal_load}
+The causal-structure panels of Fig.~\ref{fig:epi} (E, F) in the main text are the result this
+section expands. We ask a sharp, testable question about the learned graph $A$, namely whether its
+\emph{direction} is load-bearing for prediction. We answer by ablating $A$ inside the frozen do-operator
+(reversing, symmetrizing, or shuffling its edges) and re-measuring $\Delta$-prediction on the
+deployed production world model. This is a relative true-vs-shuffled comparison on
+the same perturbations, so it needs no held-out split.
+
+Panels A and B show single-TF and combination prediction under original, reversed,
+symmetrized, and shuffled $A$, scored by drift-removed \PearsonDEG and cross-fate
+discrimination AUROC. Against a $1000$-shuffle null, single-TF prediction collapses from
+Pearson $0.536\,[0.443,0.625]$ to a shuffled mean of $-0.156\pm0.010$, a gap of $+0.692$ that
+no shuffle reaches (permutation $p<0.001$, paired Wilcoxon across $66$ TFs
+$p{=}8.9\times10^{-11}$, with $59$ of $66$ TFs predicting worse under a shuffled graph). Discrimination
+AUROC falls from $0.84$ to $0.60$ and top-1 driver recall from $0.73$ to $0.02$. Reversing the
+edges is as damaging as shuffling them, so the effect is directional rather than a matter of
+connectivity alone. On combinations the gap is smaller ($+0.102$, permutation $p<0.001$,
+Wilcoxon $p{=}6.1\times10^{-5}$, all $14$ combinations improving) because the drift-removed
+combo response is dominated by a shared high-order shift. We therefore quote the single-TF
+effect as the headline. The full ablation numbers are in Table~\ref{tab:edge}.
+
+Panel C shows that the latent graph is biologically structured. The masked decoder pins each
+latent axis to a named GO:BP program at mask coherence $1.00$, and the highest-connectivity
+hubs of $A$ are developmental programs. We do \emph{not} claim $A$ recovers a curated GRN.
+With $A{=}0$ the do-operator injects only the direct shift $S_g$, which already ranks a TF's
+direct targets, so $A{=}0$ stays competitive on a direct-target metric. Propagation over the
+directed $A$ is what carries the genuine downstream and combination response, which is where
+the directed graph is load-bearing.
+
+\subsection{The edge-direction ablation in full}
+Table~\ref{tab:edge} gives the complete edge-direction ablation, computed on the deployed
+production world model. For single TFs the drift-removed \PearsonDEG collapses
+from $0.536$ with $95\%$ bootstrap CI $[0.443,0.625]$ to a shuffled-$A$ mean of
+$-0.156\pm0.010$ over $1000$ shuffles, a gap of $+0.692$ with permutation $p<0.001$ (no
+shuffle exceeds the original) and paired Wilcoxon $p=8.9\times10^{-11}$ across $66$ TFs.
+Reversing the edges ($-0.130$) is about as damaging as shuffling them, which shows the
+effect is directional and not merely connectivity. Top-1 driver recall collapses from
+$0.727$ to $0.015$ and discrimination AUROC from $0.844$ to $0.600$. On combinations the raw
+Pearson is drift-dominated (original $0.977$), so the gap is smaller at $+0.102$ but still
+significant (permutation $p<0.001$, Wilcoxon $p=6.1\times10^{-5}$ across $14$ combinations,
+all improve). We therefore quote the single-TF gap as the headline and do not carry $+0.69$
+over to combinations.
+
+\begin{table}[h]\centering\footnotesize
+\caption{Edge-direction ablation on the deployed model, drift-removed \PearsonDEG,
+top-1 driver recall, and discrimination AUROC under original, reversed, symmetrized, and
+shuffled $A$. Non-original variants are rescaled to match $\lVert A\rVert_2$.}
+\label{tab:edge}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+ & original & reversed & symmetrized & shuffled \\
+\midrule
+Single Pearson ($n{=}66$)   & $0.536$ & $-0.130$ & $0.107$ & $-0.156$ \\
+Single recall@1             & $0.727$ & $0.015$  & $0.076$ & $0.015$ \\
+Single disc AUROC           & $0.844$ & $0.592$  & $0.686$ & $0.600$ \\
+Combo Pearson ($n{=}14$)    & $0.977$ & $0.797$  & $0.918$ & $0.875$ \\
+Combo recall@1              & $0.429$ & $0.071$  & $0.071$ & $0.057$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The retired ``$+0.68$'' result}
+An earlier combination-prediction figure of about $+0.68$ over additive came from a
+non-deployable checkpoint and a raw, non-drift-removed Pearson against a cross-context
+additive baseline that itself scored near zero. That comparison conflated cross-context
+drift with model skill, because a large part of the raw combination Pearson is the shared
+mean shift that any model captures. Once we remove drift and compare against a fair,
+same-context additive baseline, the honest advantage is the $+0.18$ to $+0.23$ reported in
+the main text and corroborated by the leakage ladder in Table~\ref{tab:ladder}. We retire
+the $+0.68$ figure.
+
+\subsection{Magnitude over-prediction and calibration}
+The interaction sign and ranking are recovered but the interaction magnitude is
+uncalibrated. The DEG-MSE term is deliberately unwhitened so the model does track per-gene
+response magnitude, yet on epistasis the recovered interaction carries a sub-additive
+offset rather than a clean scale, so we report sign and rank recovery and flag the magnitude
+as an honest calibration limit. This matches the leave-one-out cross-validated pairwise
+interaction correlation of $+0.39\pm0.088$ reported in the main text, which measures rank
+and sign agreement rather than calibrated magnitude.
+
+\subsection{Identifiability and rotational ambiguity}
+Fixing the decoder to GO programs pins each latent axis to a named biological process and
+removes the coordinate permutation ambiguity of the latent, following the identifiable
+causal-disentanglement lineage of Discrepancy-VAE and its GO-structured variant
+\citep{zhang2023discrepancyvae,sena2025}. We do not claim full structural identifiability of
+$A$. The effective decoder that maps the exogenous term to genes is
+$D_{\mathrm{eff}}=D\big(I-\operatorname{diag}(1-u)A^{\top}\big)^{-1}$, and any invertible
+transform $T$ with $A'^{\top}=T A^{\top}T^{-1}$ and $D'=DT^{-1}$ that preserves the masked
+structure leaves the observational and interventional distributions unchanged. This is a
+rotational ambiguity in $A$, which we treat as a known caveat. Our load-bearing claim is the
+weaker and testable one. The graph direction improves prediction under the edge-direction
+ablation (Table~\ref{tab:edge}), and the do-operator is exact for composition
+(Eq.~\ref{eq:doop}). We do not claim that $A$ is a recovered gene-regulatory network. Because
+the model is trained prior-off on only TFs, TF-to-target databases are off-predictors in our
+regime, and a plain co-expression baseline edges out the projected graph on every reference,
+as expected for a context-specific prior-off model \citep{genernib2025,collectri2023,garcia2019dorothea,szklarczyk2023string}.

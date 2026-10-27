@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software or its results, please cite the paper below."
+title: "Compositional Perturbation Planning with a Generative Structural Causal World Model"
+authors:
+  - family-names: Goudarzi
+    given-names: Shervin
+    affiliation: "UC Berkeley; Arc Institute"
+  - family-names: Liu
+    given-names: Nuo
+    affiliation: "Arc Institute"
+  - family-names: Goodarzi
+    given-names: Hani
+    affiliation: "Arc Institute; UC San Francisco"
+preferred-citation:
+  type: conference-paper
+  title: "Compositional Perturbation Planning with a Generative Structural Causal World Model"
+  year: 2026
+  collection-title: "NeurIPS 2026 Workshop"
+  url: "https://openreview.net/pdf?id=N2ewxvaRBT"
+  authors:
+    - family-names: Goudarzi
+      given-names: Shervin
+    - family-names: Liu
+      given-names: Nuo
+    - family-names: Goodarzi
+      given-names: Hani
+repository-code: "https://github.com/goodarzilab/scCausalRL"
+license: MIT
